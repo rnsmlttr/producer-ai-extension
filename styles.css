@@ -1,0 +1,339 @@
+/* floating credit counter */
+.pai-floating-counter {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background: rgba(0, 0, 0, 0.8);
+    color: #fff;
+    padding: 10px 15px;
+    border-radius: 20px;
+    z-index: 9999;
+    font-weight: bold;
+    border: 1px solid #444;
+    pointer-events: none;
+}
+
+/* universal theme overrides */
+
+/* midnight */
+body[data-pai-theme="midnight"] {
+    background-color: #0a0e17 !important;
+    --pai-bg-color: #0a0e17 !important;
+    color: #e0e6ed !important;
+}
+
+body[data-pai-theme="midnight"] :not(img):not(iframe):not(video):not(svg) {
+    color: #e0e6ed !important;
+    border-color: #2c3e50 !important;
+}
+
+body[data-pai-theme="midnight"] main,
+body[data-pai-theme="midnight"] nav,
+body[data-pai-theme="midnight"] aside,
+body[data-pai-theme="midnight"] header,
+body[data-pai-theme="midnight"] footer,
+body[data-pai-theme="midnight"] section,
+body[data-pai-theme="midnight"] article,
+body[data-pai-theme="midnight"] .card,
+body[data-pai-theme="midnight"] [class*="card"],
+body[data-pai-theme="midnight"] [class*="container"] {
+    background-color: #0a0e17 !important;
+}
+
+body[data-pai-theme="midnight"] a,
+body[data-pai-theme="midnight"] a:visited,
+body[data-pai-theme="midnight"] button,
+body[data-pai-theme="midnight"] [role="button"] {
+    color: #4fc3f7 !important; /* cyan */
+}
+
+body[data-pai-theme="midnight"] a:hover,
+body[data-pai-theme="midnight"] button:hover {
+    color: #81d4fa !important;
+}
+
+body[data-pai-theme="midnight"] input,
+body[data-pai-theme="midnight"] textarea,
+body[data-pai-theme="midnight"] select {
+    background-color: #1a2634 !important;
+    color: #fff !important;
+    border: 1px solid #2c3e50 !important;
+}
+
+/* forest */
+body[data-pai-theme="forest"] {
+    background-color: #0c1a10 !important;
+    --pai-bg-color: #0c1a10 !important;
+    color: #e8f5e9 !important;
+}
+
+body[data-pai-theme="forest"] :not(img):not(iframe):not(video):not(svg) {
+    color: #e8f5e9 !important;
+    border-color: #1b5e20 !important;
+}
+
+body[data-pai-theme="forest"] main,
+body[data-pai-theme="forest"] nav,
+body[data-pai-theme="forest"] aside,
+body[data-pai-theme="forest"] header,
+body[data-pai-theme="forest"] footer,
+body[data-pai-theme="forest"] section,
+body[data-pai-theme="forest"] article,
+body[data-pai-theme="forest"] .card,
+body[data-pai-theme="forest"] [class*="card"],
+body[data-pai-theme="forest"] [class*="container"] {
+    background-color: #0c1a10 !important;
+}
+
+body[data-pai-theme="forest"] a,
+body[data-pai-theme="forest"] a:visited,
+body[data-pai-theme="forest"] button,
+body[data-pai-theme="forest"] [role="button"] {
+    color: #a5d6a7 !important; /* pale green */
+}
+
+body[data-pai-theme="forest"] a:hover,
+body[data-pai-theme="forest"] button:hover {
+    color: #c8e6c9 !important;
+}
+
+body[data-pai-theme="forest"] input,
+body[data-pai-theme="forest"] textarea,
+body[data-pai-theme="forest"] select {
+    background-color: #142b1b !important;
+    color: #fff !important;
+    border: 1px solid #1b5e20 !important;
+}
+
+/* sunset */
+body[data-pai-theme="sunset"] {
+    background-color: #1a0f0f !important;
+    --pai-bg-color: #1a0f0f !important;
+    color: #fff8e1 !important;
+}
+
+body[data-pai-theme="sunset"] :not(img):not(iframe):not(video):not(svg) {
+    color: #fff8e1 !important;
+    border-color: #bf360c !important;
+}
+
+body[data-pai-theme="sunset"] main,
+body[data-pai-theme="sunset"] nav,
+body[data-pai-theme="sunset"] aside,
+body[data-pai-theme="sunset"] header,
+body[data-pai-theme="sunset"] footer,
+body[data-pai-theme="sunset"] section,
+body[data-pai-theme="sunset"] article,
+body[data-pai-theme="sunset"] .card,
+body[data-pai-theme="sunset"] [class*="card"],
+body[data-pai-theme="sunset"] [class*="container"] {
+    background-color: #1a0f0f !important;
+}
+
+body[data-pai-theme="sunset"] a,
+body[data-pai-theme="sunset"] a:visited,
+body[data-pai-theme="sunset"] button,
+body[data-pai-theme="sunset"] [role="button"] {
+    color: #ffcc80 !important; /* pale orange */
+}
+
+body[data-pai-theme="sunset"] a:hover,
+body[data-pai-theme="sunset"] button:hover {
+    color: #ffe0b2 !important;
+}
+
+body[data-pai-theme="sunset"] input,
+body[data-pai-theme="sunset"] textarea,
+body[data-pai-theme="sunset"] select {
+    background-color: #2d1a1a !important;
+    color: #fff !important;
+    border: 1px solid #bf360c !important;
+}
+
+/* media fixes */
+body[data-pai-theme] img,
+body[data-pai-theme] video,
+body[data-pai-theme] canvas {
+    background-color: transparent !important;
+}
+
+body[data-pai-theme] [class*="media"],
+body[data-pai-theme] [class*="image"],
+body[data-pai-theme] [class*="cover"] {
+    background-color: transparent !important;
+}
+
+/* light themes */
+/* ice */
+body[data-pai-theme="ice"] {
+    --pai-accent-color: #0288d1;
+}
+
+body[data-pai-theme="ice"] nav,
+body[data-pai-theme="ice"] aside,
+body[data-pai-theme="ice"] .sidebar {
+    background-color: #e1f5fe !important;
+    border-right: 1px solid #b3e5fc !important;
+}
+
+body[data-pai-theme="ice"] nav *,
+body[data-pai-theme="ice"] aside * {
+    color: #01579b !important;
+    fill: #01579b !important;
+}
+
+body[data-pai-theme="ice"] a,
+body[data-pai-theme="ice"] button {
+    color: #0288d1 !important;
+}
+
+/* sage */
+body[data-pai-theme="sage"] {
+    --pai-accent-color: #388e3c;
+}
+
+body[data-pai-theme="sage"] nav,
+body[data-pai-theme="sage"] aside,
+body[data-pai-theme="sage"] .sidebar {
+    background-color: #f1f8e9 !important;
+    border-right: 1px solid #dcedc8 !important;
+}
+
+body[data-pai-theme="sage"] nav *,
+body[data-pai-theme="sage"] aside * {
+    color: #1b5e20 !important;
+    fill: #1b5e20 !important;
+}
+
+body[data-pai-theme="sage"] a,
+body[data-pai-theme="sage"] button {
+    color: #2e7d32 !important;
+}
+
+/* coral */
+body[data-pai-theme="coral"] {
+    --pai-accent-color: #d84315;
+}
+
+body[data-pai-theme="coral"] nav,
+body[data-pai-theme="coral"] aside,
+body[data-pai-theme="coral"] .sidebar {
+    background-color: #fbe9e7 !important;
+    border-right: 1px solid #ffccbc !important;
+}
+
+body[data-pai-theme="coral"] nav *,
+body[data-pai-theme="coral"] aside * {
+    color: #bf360c !important;
+    fill: #bf360c !important;
+}
+
+body[data-pai-theme="coral"] a,
+body[data-pai-theme="coral"] button {
+    color: #d84315 !important;
+}
+
+/* selected row highlight */
+.pai-selected-row {
+    background-color: rgba(0, 122, 204, 0.15) !important;
+    border-left: 3px solid #007acc;
+}
+
+/* bulk toolbar */
+.pai-bulk-toolbar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    background: #222;
+    padding: 15px;
+    display: flex;
+    justify-content: center;
+    gap: 15px;
+    z-index: 2147483647;
+    border-top: 1px solid #444;
+}
+
+/* search toolbar */
+.pai-search-toolbar {
+    position: fixed;
+    top: 70px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(18, 18, 18, 0.95);
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    padding: 8px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    z-index: 9990;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+    font-family: 'Inter', system-ui, sans-serif;
+    color: #fff;
+    opacity: 0;
+    animation: fadeIn 0.4s forwards;
+}
+
+@keyframes fadeIn {
+    to { opacity: 1; margin-top: 10px; }
+}
+
+.pai-search-input {
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.15);
+    color: #fff;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    width: 200px;
+    outline: none;
+    transition: all 0.2s;
+}
+
+.pai-search-input:focus {
+    background: rgba(255,255,255,0.12);
+    border-color: #007bff;
+    width: 240px;
+}
+
+.pai-search-stat {
+    font-size: 12px;
+    color: #aaa;
+    font-weight: 500;
+    min-width: 80px;
+    text-align: right;
+}
+
+.pai-search-btn {
+    background: transparent;
+    border: none;
+    color: #aaa;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 4px;
+    border-radius: 4px;
+}
+
+.pai-search-btn:hover {
+    color: #fff;
+    background: rgba(255,255,255,0.1);
+}
+
+/* filter dropdown */
+.pai-filter-select {
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.15);
+    color: #eee;
+    padding: 6px;
+    border-radius: 6px;
+    font-size: 12px;
+    outline: none;
+    cursor: pointer;
+}
+
+.pai-filter-select option {
+    background: #222;
+    color: #fff;
+}
