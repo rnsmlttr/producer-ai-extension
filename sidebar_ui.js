@@ -147,6 +147,18 @@
         }
     }
 
+    // --- Helper for single file download ---
+    function downloadBlob(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
     // --- Helper for scraping improved selectors ---
     function extractTextFromSelectors(doc, selectors) {
         for (const sel of selectors) {
@@ -858,40 +870,76 @@
                 if (format === 'original') audioUrl = `https://cdn1.producer.ai/${item.uuid}.wav`;
 
                 try {
-                    const resp = await fetch(audioUrl);
-                    if (resp.ok) {
-                        const blob = await resp.blob();
-                        const ext = (format === 'original') ? 'wav' : 'mp3';
+                    // Try to fetch metadata first to get a direct URL if possible
+                    // This mirrors handleMasterExport logic
+                    let directAudioUrl = "";
+                    try {
+                        const songPageResp = await fetch(`https://www.producer.ai/song/${item.uuid}`);
+                        if (songPageResp.ok) {
+                            const text = await songPageResp.text();
+                            const parser = new DOMParser();
+                            const doc = parser.parseFromString(text, 'text/html');
+                            const metaAudio = doc.querySelector('meta[property="og:audio"]') || doc.querySelector('meta[name="twitter:player:stream"]');
+                            if (metaAudio) directAudioUrl = metaAudio.content;
 
-                        if (delivery === 'zip') {
-                            folder.file(`${safeName}.${ext}`, blob);
-                        } else {
-                            // Individual download
-                            const a = document.createElement('a');
-                            a.href = URL.createObjectURL(blob);
-                            a.download = `${safeName}.${ext}`;
-                            a.click();
-                            URL.revokeObjectURL(a.href);
-                        }
-                        success++;
-                    } else {
-                        // Fallback: if wav failed, try mp3
-                        if (format === 'original') {
-                            const mp3Resp = await fetch(`https://cdn1.producer.ai/${item.uuid}.mp3`);
-                            if (mp3Resp.ok) {
-                                const blob = await mp3Resp.blob();
-                                if (delivery === 'zip') folder.file(`${safeName}.mp3`, blob);
-                                else {
-                                    const a = document.createElement('a');
-                                    a.href = URL.createObjectURL(blob);
-                                    a.download = `${safeName}.mp3`;
-                                    a.click();
+                            // HYDRATION FALLBACK
+                            if (!directAudioUrl) {
+                                const script = doc.getElementById('__NEXT_DATA__');
+                                if (script) {
+                                    const json = JSON.parse(script.innerText);
+                                    const songData = json.props.pageProps.song || json.props.pageProps.clip;
+                                    if (songData && songData.audio_url) directAudioUrl = songData.audio_url;
                                 }
-                                success++;
+                            }
+                        }
+                    } catch (e) { }
+
+                    // Determine URL hierarchy
+                    // 1. If format is 'original' (WAV), try CDN WAV first.
+                    // 2. If valid direct URL found, use that.
+                    // 3. Fallback to CDN MP3.
+
+                    let successForThisSong = false;
+
+                    if (format === 'original') {
+                        // Try WAV first
+                        const wavUrl = `https://cdn1.producer.ai/${item.uuid}.wav`;
+                        const r = await fetch(wavUrl);
+                        if (r.ok) {
+                            const b = await r.blob();
+                            if (delivery === 'zip') folder.file(`${safeName}.wav`, b);
+                            else downloadBlob(b, `${safeName}.wav`);
+                            successForThisSong = true;
+                        }
+                    }
+
+                    // If WAV failed or wasn't requested, try MP3/Direct
+                    if (!successForThisSong) {
+                        const targetUrl = directAudioUrl || `https://cdn1.producer.ai/${item.uuid}.mp3`;
+                        const r = await fetch(targetUrl);
+                        if (r.ok) {
+                            const b = await r.blob();
+                            if (delivery === 'zip') folder.file(`${safeName}.mp3`, b);
+                            else downloadBlob(b, `${safeName}.mp3`);
+                            successForThisSong = true;
+                        } else {
+                            // If targetUrl failed and it was direct, try CDN fallback
+                            if (directAudioUrl) {
+                                const cdnUrl = `https://cdn1.producer.ai/${item.uuid}.mp3`;
+                                const r2 = await fetch(cdnUrl);
+                                if (r2.ok) {
+                                    const b2 = await r2.blob();
+                                    if (delivery === 'zip') folder.file(`${safeName}.mp3`, b2);
+                                    else downloadBlob(b2, `${safeName}.mp3`);
+                                    successForThisSong = true;
+                                }
                             }
                         }
                     }
-                } catch (e) { }
+
+                    if (successForThisSong) success++;
+
+                } catch (e) { console.error(e); }
 
                 await new Promise(r => setTimeout(r, 100));
             }
