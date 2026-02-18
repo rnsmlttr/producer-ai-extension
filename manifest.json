@@ -1,16 +1,21 @@
 {
     "manifest_version": 3,
     "name": "Producer.ai Download Suite (Clean)",
-    "version": "3.8",
+    "version": "4.0",
     "description": "Complete downloading toolkit.",
     "permissions": [
         "activeTab",
         "scripting",
         "downloads",
-        "storage"
+        "storage",
+        "pageCapture",
+        "tabs"
     ],
     "host_permissions": [
-        "https://www.producer.ai/*"
+        "https://*.producer.ai/*",
+        "https://cdn1.producer.ai/*",
+        "https://*.s3.amazonaws.com/*",
+        "<all_urls>"
     ],
     "background": {
         "service_worker": "bg.js"

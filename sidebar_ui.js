@@ -20,6 +20,46 @@
         set: (obj) => new Promise(r => chrome.storage.local.set(obj, r))
     };
 
+    // --- Core Auth Helper (Single Definition) ---
+    function getAuthToken() {
+        try {
+            const cookies = document.cookie.split('; ');
+            const authCookies = cookies.filter(c => c.trim().startsWith('sb-api-auth-token.'));
+            if (authCookies.length === 0) return null;
+            authCookies.sort();
+            const fullValue = authCookies.map(c => c.split('=')[1]).join('');
+            const cleanValue = fullValue.replace('base64-', '');
+            const sessionData = JSON.parse(atob(cleanValue));
+            return sessionData.access_token;
+        } catch (e) { return null; }
+    }
+
+    // --- Core Audio Fetch Helper (Handles JSON Redirects) ---
+    async function fetchAudioBlob(uuid, format, token) {
+        // Adjust format for API if needed (e.g. 'original' -> 'wav')
+        const fmt = format === 'original' ? 'wav' : format;
+        const apiBase = `https://www.producer.ai/__api/${uuid}/download?format=${fmt}`;
+
+        const resp = await fetch(apiBase, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!resp.ok) throw new Error(`API Status ${resp.status}`);
+
+        const type = resp.headers.get('content-type');
+        if (type && type.includes('application/json')) {
+            // User reported downloading JSON files instead of WAVs. 
+            // This handles the signed-URL redirect pattern.
+            const data = await resp.json();
+            if (data.url) {
+                // If it's a signed URL, fetch IT to get the actual blob
+                const redirectResp = await fetch(data.url);
+                if (!redirectResp.ok) throw new Error(`Redirect Status ${redirectResp.status}`);
+                return await redirectResp.blob();
+            }
+        }
+        return await resp.blob();
+    }
+
     // credits logic
     async function initCredits() {
         try {
@@ -62,16 +102,10 @@
 
         const updateFromDOM = () => {
             try {
-                // User provided class structure for the menu item
-                // We search for elements sharing key classes and filtering by text "Credits"
                 const candidates = document.querySelectorAll('.flex.items-center.justify-between.cursor-pointer');
-
                 for (const node of candidates) {
-                    // Check for specific tailwind classes to ensure we have the right menu item
                     if (node.className.includes('data-highlighted:bg-bg-2') && node.className.includes('text-fg-1')) {
-                        // Check if this row is actually for Credits
                         if (node.innerText.toLowerCase().includes('credits')) {
-                            // Extract the number
                             const match = node.innerText.match(/(\d[\d,.]*[KMB]?)/);
                             if (match) {
                                 const val = match[1];
@@ -88,7 +122,6 @@
             } catch (e) { }
         };
 
-        // throttle observer
         let timeout;
         observer = new MutationObserver(() => {
             if (!timeout) {
@@ -206,243 +239,498 @@
         if (typeof JSZip === 'undefined') { alert("JSZip not loaded. Reload page."); return; }
 
         const btn = document.getElementById('sp-run-master-export');
+        console.log("ANTIGRAVITY: handleMasterExport V4.0 STARTED"); // VERSION MARKER
         const setBtn = (txt, dis) => { if (btn) { btn.innerText = txt; btn.disabled = dis; } };
 
-        setBtn("Initializing...", true);
+        setBtn("Initializing V4.0...", true); // VISIBLE VERSION MARKER
+
+        // CONFIGURATION
+        const BATCH_SIZE = 50;
+        const DELAY_BETWEEN_BATCHES = 2000; // 2 seconds
 
         let stats = { total: 0, success: 0, failed: 0 };
+        const allMetadata = []; // Accumulate metadata across batches
 
         try {
-            const zip = new JSZip();
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-            const safeTitle = (STATE.pageTitle || "Export").replace(/[^a-z0-9-_]/gi, '_');
-            const rootName = `${safeTitle}_Master_Package_${timestamp}`;
-            const rootFolder = zip.folder(rootName);
+            STATE.pageTitle = extractPageTitle(); // Refresh title
+            updateUIForPageType();
 
-            const audioFolder = rootFolder.folder("Audio_WAV");
-            const lyricsFolder = rootFolder.folder("Lyrics");
-            const metaFolder = rootFolder.folder("Metadata");
-            const chatFolder = rootFolder.folder("Chat_Logs");
-            const imgFolder = rootFolder.folder("Images");
+            const token = getAuthToken();
+            if (!token) throw new Error("Not authenticated. Please refresh.");
 
-            // image scraping
-            const images = Array.from(document.querySelectorAll('img')).filter(img => {
-                const src = img.src || "";
-                return src.includes('image_') || src.includes('generated');
-            });
-
-            // deduplicate
-            const uniqueImgUrls = [...new Set(images.map(i => i.src))];
-
-            // identify "main" art
-            let mainArtUrl = "";
-            let maxArea = 0;
-
-            images.forEach(img => {
-                const rect = img.getBoundingClientRect();
-                const area = rect.width * rect.height;
-                if (area > maxArea && area > 10000) {
-                    maxArea = area;
-                    mainArtUrl = img.src;
-                }
-            });
-
-            if (!mainArtUrl && uniqueImgUrls.length > 0) mainArtUrl = uniqueImgUrls[0];
-
-            // download main art
-            if (mainArtUrl) {
-                try {
-                    setBtn("Downloading Art...", true);
-                    const resp = await fetch(mainArtUrl);
-                    if (resp.ok) {
-                        const blob = await resp.blob();
-                        const type = blob.type.split('/')[1] || 'jpg';
-                        rootFolder.file(`AlbumArt.${type}`, blob);
-                    }
-                } catch (e) { }
-            }
-
-            // download other images
-            const otherImages = uniqueImgUrls.filter(u => u !== mainArtUrl);
-            if (otherImages.length > 0) {
-                let imgCount = 0;
-                for (const url of otherImages) {
-                    try {
-                        const r = await fetch(url);
-                        if (r.ok) {
-                            const b = await r.blob();
-                            const t = b.type.split('/')[1] || 'jpg';
-                            imgFolder.file(`Generated_${++imgCount}.${t}`, b);
-                        }
-                    } catch (e) { }
-                }
-            }
-
-            // chat logs
-            if (STATE.pageType === 'session') {
-                const messageBlocks = Array.from(document.querySelectorAll('.group.w-full'));
-                let log = "SESSION CHAT LOG\n=================\n\n";
-                messageBlocks.forEach(block => {
-                    const isUser = block.querySelector('.flex-row-reverse') !== null || block.className.includes('justify-end');
-                    const sender = isUser ? "USER" : "AGENT";
-                    const text = block.innerText.replace(/You said:|Agent said:/g, '').trim();
-                    log += `[${sender}]\n${text} \n-----------------\n`;
-                });
-                chatFolder.file("Session_Chat.txt", log);
-            }
-
-            // identify songs
-            const songRows = Array.from(document.querySelectorAll('div[role="button"][aria-label^="Open details for"]'));
+            // --- 1. IDENTIFY SONGS (Global) ---
             const uniqueSongs = [];
             const seen = new Set();
+            const pathname = window.location.pathname;
+            const isSongPage = pathname.includes('/song/');
 
-            // main list logic
-            songRows.forEach(row => {
-                try {
-                    const link = row.querySelector('a[href^="/song/"]');
-                    if (link) {
+            if (isSongPage) {
+                // SONG PAGE: STRICTLY export only the current song.
+                // Do NOT scan for other links to avoid "More from" sidebar leaks.
+                const segments = pathname.replace(/\/+$/, '').split('/');
+                const uuid = segments[segments.indexOf('song') + 1];
+
+                if (uuid) {
+                    uniqueSongs.push({ uuid, element: document.body });
+                } else {
+                    throw new Error("Could not identify Song UUID from URL.");
+                }
+            } else {
+                // LIST PAGES (Session/Playlist): Export all listed songs
+                const songRows = Array.from(document.querySelectorAll('div[role="button"][aria-label^="Open details for"]'));
+                songRows.forEach(row => {
+                    try {
+                        const link = row.querySelector('a[href^="/song/"]');
+                        if (link) {
+                            const href = link.getAttribute('href').replace(/\/+$/, '');
+                            const uuid = href.split('/').pop();
+                            if (!seen.has(uuid)) {
+                                seen.add(uuid);
+                                uniqueSongs.push({ uuid, element: row });
+                            }
+                        }
+                    } catch (e) { }
+                });
+
+                // Fallback for lists if main rows fail
+                if (uniqueSongs.length === 0) {
+                    const queries = document.querySelectorAll('a[href^="/song/"]');
+                    queries.forEach(link => {
                         const href = link.getAttribute('href').replace(/\/+$/, '');
                         const uuid = href.split('/').pop();
                         if (!seen.has(uuid)) {
                             seen.add(uuid);
-                            uniqueSongs.push({ uuid, element: row });
+                            uniqueSongs.push({ uuid, element: link.closest('div') || document.body });
                         }
-                    }
-                } catch (e) { }
-            });
-
-            // fallback logic
-            if (uniqueSongs.length === 0) {
-                const queries = document.querySelectorAll('a[href^="/song/"]');
-                queries.forEach(link => {
-                    const href = link.getAttribute('href').replace(/\/+$/, '');
-                    const uuid = href.split('/').pop();
-                    if (!seen.has(uuid)) {
-                        seen.add(uuid);
-                        uniqueSongs.push({ uuid, element: link.closest('div') });
-                    }
-                });
+                    });
+                }
             }
 
             if (uniqueSongs.length === 0) throw new Error("No songs found to export.");
-
             stats.total = uniqueSongs.length;
 
-            // processing loop
-            const metadataRecords = [];
-            let processed = 0;
+            // --- 2. BATCH PROCESSING ---
+            const BATCH_SIZE = 50;
+            const totalBatches = Math.ceil(uniqueSongs.length / BATCH_SIZE);
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const safeSessionTitle = (STATE.pageTitle || "Export").replace(/[^a-z0-9-_]/gi, '_');
 
-            for (const item of uniqueSongs) {
-                processed++;
-                setBtn(`Exporting ${processed}/${uniqueSongs.length}...`, true);
+            // --- GLOBAL IMAGE DEDUPLICATION ---
+            const processedImageUrls = new Set();
+            let mainSessionArtUrl = "";
 
-                // get list title
-                let listTitle = "Untitled";
-                if (item.element) {
-                    const aria = item.element.getAttribute('aria-label');
-                    if (aria && aria.startsWith("Open details for ")) listTitle = aria.replace("Open details for ", "").trim();
-                    else {
-                        const h4 = item.element.querySelector('h4');
-                        if (h4) listTitle = h4.innerText.trim();
+            for (let i = 0; i < totalBatches; i++) {
+                const batchNum = i + 1;
+                const start = i * BATCH_SIZE;
+                const end = Math.min(start + BATCH_SIZE, uniqueSongs.length);
+                const batchSongs = uniqueSongs.slice(start, end);
+
+                setBtn(`Batch ${batchNum}/${totalBatches} (${start + 1}-${end})...`, true);
+
+                const zip = new JSZip();
+                // Only append Part info if we actually have multiple parts
+                let partName = `${safeSessionTitle}_${timestamp}`;
+                if (totalBatches > 1) {
+                    partName = `${safeSessionTitle}_Part${batchNum}_of_${totalBatches}_${timestamp}`;
+                }
+
+                const rootFolder = zip.folder(partName);
+
+                const audioFolder = rootFolder.folder("Audio");
+                const lyricsFolder = rootFolder.folder("Lyrics");
+
+                // Folders for Art (Conditioned)
+                const coverFolder = rootFolder.folder("Cover_Art");
+                const altFolder = rootFolder.folder("Alt_Art");
+
+                // --- BATCH 1 EXTRAS: Images & Chat ---
+                if (i === 0) {
+                    const chatFolder = rootFolder.folder("Chat_Logs");
+
+                    // 1. Chat Logs
+                    if (STATE.pageType === 'session') {
+                        const messageBlocks = Array.from(document.querySelectorAll('.group.w-full'));
+                        let log = "SESSION CHAT LOG\n=================\n\n";
+                        messageBlocks.forEach(block => {
+                            const isUser = block.querySelector('.flex-row-reverse') !== null || block.className.includes('justify-end');
+                            const sender = isUser ? "USER" : "AGENT";
+                            const text = block.innerText.replace(/You said:|Agent said:/g, '').trim();
+                            log += `[${sender}]\n${text} \n-----------------\n`;
+                        });
+                        chatFolder.file("Session_Chat.txt", log);
+                    }
+
+                    // 2. Images (Session Scan)
+                    // This logic finds ALL images loosely matching generations in the DOM
+                    const images = Array.from(document.querySelectorAll('img')).filter(img => {
+                        const src = img.src || "";
+                        return src.includes('image_') || src.includes('generated') || src.includes('storage.googleapis.com');
+                    });
+                    const uniqueImgUrls = [...new Set(images.map(i => i.src))];
+
+                    // Main Art Detection (Largest Area)
+                    let maxArea = 0;
+                    images.forEach(img => {
+                        const rect = img.getBoundingClientRect();
+                        const area = rect.width * rect.height;
+                        if (area > maxArea && area > 10000) {
+                            maxArea = area;
+                            mainSessionArtUrl = img.src;
+                        }
+                    });
+
+                    // Fallback Main Art
+                    if (!mainSessionArtUrl && uniqueImgUrls.length > 0) mainSessionArtUrl = uniqueImgUrls[0];
+
+                    // --- DOWNLOAD MAIN COVER ART (ONCE) ---
+                    if (mainSessionArtUrl) {
+                        try {
+                            const resp = await fetch(mainSessionArtUrl);
+                            if (resp.ok) {
+                                const blob = await resp.blob();
+                                const type = blob.type.split('/')[1] || 'jpg';
+                                coverFolder.file(`Session_Cover.${type}`, blob);
+                                processedImageUrls.add(mainSessionArtUrl); // MARK AS PROCESSED
+                            }
+                        } catch (e) { }
+                    }
+
+                    // --- DOWNLOAD ALT ART ---
+                    const otherImages = uniqueImgUrls.filter(u => u !== mainSessionArtUrl);
+                    let imgCount = 0;
+                    for (const url of otherImages) {
+                        if (processedImageUrls.has(url)) continue; // Skip if already done (unlikely here but safe)
+                        try {
+                            const r = await fetch(url);
+                            if (r.ok) {
+                                const b = await r.blob();
+                                const t = b.type.split('/')[1] || 'jpg';
+                                altFolder.file(`Alt_Gen_${++imgCount}.${t}`, b);
+                                processedImageUrls.add(url);
+                            }
+                        } catch (e) { }
                     }
                 }
 
-                // fetch song page
-                const songUrl = `https://www.producer.ai/song/${item.uuid}`;
-                let lyrics = "";
-                let sound = "";
-                let directAudioUrl = "";
+                // --- PROCESS SONGS IN BATCH ---
+                for (const item of batchSongs) {
+                    setBtn(`Batch ${batchNum}: Song ${allMetadata.length + 1}/${uniqueSongs.length}...`, true);
 
-                try {
-                    const resp = await fetch(songUrl);
-                    if (resp.ok) {
-                        const text = await resp.text();
-                        const parser = new DOMParser();
-                        const doc = parser.parseFromString(text, 'text/html');
+                    // Title Extraction (Legacy List View)
+                    let listTitle = "Untitled";
+                    // Only use list title if we are NOT on a song page, to avoid cross-contamination
+                    if (!isSongPage && item.element && item.element !== document.body) {
+                        const aria = item.element.getAttribute('aria-label');
+                        if (aria && aria.startsWith("Open details for ")) listTitle = aria.replace("Open details for ", "").trim();
+                        else {
+                            const h4 = item.element.querySelector('h4');
+                            if (h4) listTitle = h4.innerText.trim();
+                        }
+                    }
 
-                        // extract metadata
-                        lyrics = extractTextFromSelectors(doc, ['.lyrics', 'div[class*="lyrics"]', '[data-testid="lyrics"]', '.whitespace-pre-wrap']);
-                        sound = extractTextFromSelectors(doc, ['.sound', 'div[class*="sound"]', '[data-testid="sound"]', '.text-xs.bg-bg-3']);
+                    // Fetch Song Metadata
+                    // Fetch Song Metadata
+                    const songUrl = `https://www.producer.ai/song/${item.uuid}`;
+                    let lyrics = "";
+                    let sound = "";
+                    let model = "unknown";
+                    let deepTitle = "";
+                    let neg_prompt = "";
+                    let coverUrl = "";
 
-                        // try to find audio url in meta tags
-                        const metaAudio = doc.querySelector('meta[property="og:audio"]') || doc.querySelector('meta[name="twitter:player:stream"]');
-                        if (metaAudio) directAudioUrl = metaAudio.content;
+                    try {
+                        const resp = await fetch(songUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+                        if (resp.ok) {
+                            const htmlText = await resp.text();
+                            const parser = new DOMParser();
+                            const doc = parser.parseFromString(htmlText, 'text/html');
 
-                        // hydration fallback
-                        if (!lyrics || !sound || !directAudioUrl) {
+                            // --- 1. HYDRATION DATA (Primary Source) ---
+                            // This is the most reliable source for everything
                             const script = doc.getElementById('__NEXT_DATA__');
+                            let hydrationData = null;
                             if (script) {
-                                const json = JSON.parse(script.innerText);
-                                const songData = json.props.pageProps.song || json.props.pageProps.clip;
-                                if (songData) {
-                                    if (songData.metadata?.prompt) lyrics = songData.metadata.prompt;
-                                    if (songData.metadata?.tags) sound = songData.metadata.tags;
-                                    if (songData.title && listTitle === "Untitled") listTitle = songData.title;
-                                    if (songData.audio_url) directAudioUrl = songData.audio_url;
+                                try {
+                                    const json = JSON.parse(script.innerText);
+
+                                    // 1. Try standard pageProps
+                                    if (json.props?.pageProps?.song) hydrationData = json.props.pageProps.song;
+                                    else if (json.props?.pageProps?.clip) hydrationData = json.props.pageProps.clip;
+
+                                    // 2. Try SDC Query Cache (Deep Search via UUID)
+                                    // This is robust against schema changes (song vs riff vs unknown)
+                                    if (!hydrationData && json.props?.sdc?.queryClient?.queries) {
+                                        const queries = json.props.sdc.queryClient.queries;
+                                        const targetUuid = item.uuid;
+
+                                        // Find query that contains our UUID in its hash OR data
+                                        const foundQuery = queries.find(q => {
+                                            // Check query key/hash
+                                            if (JSON.stringify(q.queryKey).includes(targetUuid)) return true;
+
+                                            // Check data ID
+                                            const d = q.state?.data;
+                                            if (d) {
+                                                // Direct ID match
+                                                if (d.id === targetUuid) return true;
+                                                // Nested ID match (riff/song/clip wrapper)
+                                                if ((d.riff?.id === targetUuid) || (d.song?.id === targetUuid) || (d.clip?.id === targetUuid)) return true;
+                                            }
+                                            return false;
+                                        });
+
+                                        if (foundQuery) {
+                                            const d = foundQuery.state.data;
+                                            if (d.id === targetUuid) hydrationData = d;
+                                            else hydrationData = d.riff || d.song || d.clip || d; // Fallback to whatever object holds the data
+                                        }
+                                    }
+
+                                    if (hydrationData) {
+                                        if (hydrationData.title) deepTitle = hydrationData.title;
+
+                                        // Model Mapping
+                                        if (hydrationData.model_display_name) model = hydrationData.model_display_name;
+                                        else if (hydrationData.major_model_version) model = `${hydrationData.major_model_version}`;
+
+                                        // Metadata Mapping
+                                        // 1. Lyrics / Prompt
+                                        if (hydrationData.metadata?.prompt) lyrics = hydrationData.metadata.prompt;
+                                        else if (hydrationData.prompt) lyrics = hydrationData.prompt;
+
+                                        // 2. Sound Description (Tags)
+                                        if (hydrationData.metadata?.tags) sound = hydrationData.metadata.tags;
+                                        else if (hydrationData.tags) sound = hydrationData.tags;
+                                        if (!sound && hydrationData.sound) sound = hydrationData.sound;
+
+                                        // 3. Negative Prompt (Strict String)
+                                        if (hydrationData.metadata?.negative_prompt) neg_prompt = hydrationData.metadata.negative_prompt;
+                                        else if (hydrationData.metadata?.neg_prompt) neg_prompt = hydrationData.metadata.neg_prompt;
+
+                                        // 4. Other Fields
+                                        var vibe_input = hydrationData.metadata?.vibe_input || null;
+                                        var voice_input = hydrationData.metadata?.voice_input || null;
+                                        var strength = hydrationData.metadata?.strength || null;
+
+                                        // 5. Fallback Lyrics
+                                        if (!lyrics && hydrationData.lyrics) lyrics = hydrationData.lyrics;
+                                    }
+                                } catch (e) { console.error("Hydration parse error", e); }
+                            }
+
+                            // --- 2. DOM FALLBACKS (If Hydration Failed) ---
+                            // CLEANUP: Case-insensitive removal of sidebar
+                            const sidebars = doc.querySelectorAll('div, aside, section');
+                            sidebars.forEach(el => {
+                                if (el.innerText && /More from/i.test(el.innerText)) {
+                                    el.remove();
+                                }
+                            });
+
+                            // Title Fallback
+                            if (!deepTitle) {
+                                // 1. Primary: Role Textbox (most distinct)
+                                const titleEl = doc.querySelector('div[role="textbox"][contenteditable="true"]');
+                                if (titleEl && titleEl.innerText.trim()) deepTitle = titleEl.innerText.trim();
+
+                                // 2. Secondary: H1
+                                if (!deepTitle) {
+                                    const h1 = doc.querySelector('h1');
+                                    if (h1) deepTitle = h1.innerText.trim();
                                 }
                             }
-                        }
-                    }
-                } catch (e) { console.error("fetch error", e); }
-
-                const finalTitle = (listTitle !== "Untitled") ? listTitle : item.uuid;
-                const safeName = finalTitle.replace(/[^a-z0-9-_ ]/gi, '').trim();
-
-                // download audio
-                try {
-                    // prioritize extracted url, fallback to producer cdn
-                    const targetUrl = directAudioUrl || `https://cdn1.producer.ai/${item.uuid}.mp3`;
-
-                    const audioResp = await fetch(targetUrl);
-                    if (audioResp.ok) {
-                        const blob = await audioResp.blob();
-                        audioFolder.file(`${safeName}.mp3`, blob);
-                        stats.success++;
-                    } else {
-                        // last ditch attempt: maybe it's a wav?
-                        if (!directAudioUrl) {
-                            const wavResp = await fetch(`https://cdn1.producer.ai/${item.uuid}.wav`);
-                            if (wavResp.ok) {
-                                const blob = await wavResp.blob();
-                                audioFolder.file(`${safeName}.wav`, blob);
-                                stats.success++;
-                            } else {
-                                stats.failed++;
+                            // Filter out generic titles (Robust)
+                            if (deepTitle && (/Producer\.?ai/i.test(deepTitle) || /Toolsuite/i.test(deepTitle) || deepTitle === "Song")) {
+                                deepTitle = "";
                             }
-                        } else {
-                            stats.failed++;
+
+                            // Metadata Sections Fallback
+                            const findSectionContent = (labelText) => {
+                                // Strict equality check on text content to avoid partial matches
+                                const candidates = Array.from(doc.querySelectorAll('div, span, h2, h3, h4')).filter(el => el.innerText.trim().toLowerCase() === labelText.toLowerCase());
+                                for (const header of candidates) {
+                                    let sibling = header.nextElementSibling;
+                                    // Sometimes the content is in the parent's next sibling
+                                    if (!sibling && header.parentElement) {
+                                        sibling = header.parentElement.nextElementSibling;
+                                    }
+
+                                    if (sibling) {
+                                        let html = sibling.innerHTML;
+                                        html = html.replace(/<br\s*\/?>/gi, '\n');
+                                        html = html.replace(/<\/p>/gi, '\n\n');
+                                        const tmp = doc.createElement('div');
+                                        tmp.innerHTML = html;
+                                        return tmp.textContent.trim();
+                                    }
+                                }
+                                return "";
+                            };
+
+                            if (!sound) sound = findSectionContent("Sound");
+                            if (!neg_prompt) neg_prompt = findSectionContent("Negative prompt");
+                            if (!lyrics) lyrics = findSectionContent("Lyrics");
+
+                            // Model Fallback
+                            if (!model || model === "unknown") {
+                                // 1. Try "Model" label sibling
+                                const scrapedModel = findSectionContent("Model");
+                                if (scrapedModel) model = scrapedModel;
+
+                                // 2. Try text search for FUZZ / v3.5 using regex on CLEANED body
+                                if (!model || model === "unknown") {
+                                    const fullText = doc.body.innerText;
+                                    const modelMatch = fullText.match(/(FUZZ-[\w\d.-]+|v\d+(\.\d+)?)/i);
+                                    if (modelMatch) model = modelMatch[0];
+                                }
+                            }
+
+                            // --- 3. COVER ART ---
+                            if (deepTitle) {
+                                const img = doc.querySelector(`img[alt="${deepTitle.replace(/"/g, '\\"')}"]`);
+                                if (img) coverUrl = img.src;
+                            }
+                            if (!coverUrl) {
+                                const mainImg = doc.querySelector('img.aspect-square.object-cover.h-full.w-full[src*="storage.googleapis.com"]');
+                                if (mainImg) coverUrl = mainImg.src;
+                            }
                         }
+                    } catch (e) { console.error("fetch error", e); }
+
+                    const finalTitle = deepTitle || (listTitle !== "Untitled" ? listTitle : "") || "";
+
+                    // Safe Filename Generation (Permissive)
+                    // Allow [] () # , etc. Only remove strictly illegal chars
+                    let safeName = finalTitle.replace(/[\\/:*?"<>|]/g, '_').trim();
+
+                    // If we still don't have a name, fallback to UUID but mark it
+                    if (!safeName) safeName = `Song_${item.uuid}`;
+
+
+
+                    // --- DOWNLOAD AUDIO ---
+                    try {
+                        // Priority: WAV -> MP3
+                        try {
+                            const blob = await fetchAudioBlob(item.uuid, 'wav', token);
+                            audioFolder.file(`${safeName}.wav`, blob);
+                            stats.success++;
+                        } catch (e) {
+                            // Fallback MP3
+                            try {
+                                const blob = await fetchAudioBlob(item.uuid, 'mp3', token);
+                                audioFolder.file(`${safeName}.mp3`, blob);
+                                stats.success++;
+                            } catch (e2) { stats.failed++; }
+                        }
+                    } catch (e) { stats.failed++; }
+
+                    // Save Lyrics
+                    if (lyrics) lyricsFolder.file(`${safeName}.txt`, lyrics);
+
+                    // Add to Global Metadata
+                    allMetadata.push({
+                        title: finalTitle,
+                        uuid: item.uuid,
+                        sound_desc: sound,
+                        neg_prompt: neg_prompt,
+                        vibe_input: vibe_input || null, // Defined in extraction block or null
+                        voice_input: voice_input || null,
+                        strength: strength || null,
+                        model: model,
+                        cover_url: coverUrl,
+                        lyrics: lyrics,
+                        batch: batchNum
+                    });
+
+                    // Save Cover Art (Deduplicated)
+                    if (coverUrl && coverFolder) {
+                        try {
+                            if (!processedImageUrls.has(coverUrl)) {
+                                const imgResp = await fetch(coverUrl);
+                                if (imgResp.ok) {
+                                    const imgBlob = await imgResp.blob();
+                                    let ext = "jpg";
+                                    if (coverUrl.includes(".png")) ext = "png";
+                                    else if (coverUrl.includes(".webp")) ext = "webp";
+
+                                    // It's a unique cover, probably from a playlist item different from the session cover
+                                    coverFolder.file(`${safeName}.${ext}`, imgBlob);
+                                    processedImageUrls.add(coverUrl);
+                                }
+                            }
+                        } catch (e) { console.error("Failed to fetch cover", e); }
                     }
-                } catch (e) { stats.failed++; }
 
-                // save lyrics
-                if (lyrics) lyricsFolder.file(`${safeName}.txt`, lyrics);
+                    // Small delay per song to be nice to API
+                    await new Promise(r => setTimeout(r, 100));
+                }
 
-                // metadata
-                metadataRecords.push({
-                    title: finalTitle,
-                    uuid: item.uuid,
-                    style: sound,
-                    url: songUrl
-                });
+                // --- FINAL BATCH EXTRAS: Full Metadata ---
+                if (i === totalBatches - 1) {
+                    const metaFolder = rootFolder.folder("Metadata");
+                    // Dynamic Filename
+                    const metaName = `full_${STATE.pageType || 'session'}_metadata`;
 
-                await new Promise(r => setTimeout(r, 200));
+                    // JSON
+                    metaFolder.file(`${metaName}.json`, JSON.stringify(allMetadata, null, 2));
+
+                    // CSV
+                    // CSV
+                    const header = ["title", "uuid", "URL", "sound_desc", "neg_prompt", "vibe_input", "voice_input", "strength", "model", "lyrics", "cover_url", "batch"];
+                    const rows = [header.join(",")];
+
+                    allMetadata.forEach(r => {
+                        const title = r.title ? String(r.title) : "";
+                        const uuid = r.uuid ? String(r.uuid) : "";
+                        const url = r.url ? String(r.url) : "";
+                        const sound = r.sound_desc ? String(r.sound_desc) : "";
+                        const neg = r.neg_prompt ? String(r.neg_prompt) : "";
+                        const vibe = r.vibe_input ? String(r.vibe_input) : "";
+                        const voice = r.voice_input ? String(r.voice_input) : "";
+                        const str = r.strength ? String(r.strength) : "";
+                        const model = r.model ? String(r.model) : "";
+                        const lyrics = r.lyrics ? String(r.lyrics) : "";
+                        const cover = r.cover_url ? String(r.cover_url) : "";
+                        const batch = r.batch ? String(r.batch) : "";
+
+                        const row = [
+                            `"${title.replace(/"/g, '""')}"`,
+                            `"${uuid.replace(/"/g, '""')}"`,
+                            `"${url.replace(/"/g, '""')}"`,
+                            `"${sound.replace(/"/g, '""')}"`,
+                            `"${neg.replace(/"/g, '""')}"`,
+                            `"${vibe.replace(/"/g, '""')}"`,
+                            `"${voice.replace(/"/g, '""')}"`,
+                            `"${str}"`,
+                            `"${model.replace(/"/g, '""')}"`,
+                            `"${lyrics.replace(/"/g, '""').replace(/\n/g, '\\n')}"`,
+                            `"${cover.replace(/"/g, '""')}"`,
+                            `"${batch}"`
+                        ];
+                        rows.push(row.join(","));
+                    });
+
+                    metaFolder.file(`${metaName}.csv`, rows.join("\n"));
+                }
+
+                // --- DOWNLOAD BATCH ZIP ---
+                const content = await zip.generateAsync({ type: "blob" });
+                const a = document.createElement("a");
+                a.href = URL.createObjectURL(content);
+                a.download = `${partName}.zip`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(a.href);
+
+                // --- UTILS ---
+                // --- COOLDOWN ---
+                if (i < totalBatches - 1) {
+                    setBtn(`Cooling down...`, true);
+                    await new Promise(r => setTimeout(r, DELAY_BETWEEN_BATCHES));
+                }
             }
-
-            // save csv/json
-            metaFolder.file("metadata.json", JSON.stringify(metadataRecords, null, 2));
-            const csv = ["Title,UUID,Style,URL"];
-            metadataRecords.forEach(r => csv.push(`"${r.title}","${r.uuid}","${r.style}","${r.url}"`));
-            metaFolder.file("metadata.csv", csv.join("\n"));
-
-            // compress
-            setBtn("Compressing...", true);
-            const content = await zip.generateAsync({ type: "blob" });
-            const a = document.createElement("a");
-            a.href = URL.createObjectURL(content);
-            a.download = `${rootName}.zip`;
-            a.click();
-            URL.revokeObjectURL(a.href);
 
             showConfirmationModal(stats);
 
@@ -478,7 +766,7 @@
             <div style="padding: 20px; border-bottom: 1px solid #222; display:flex; justify-content:space-between; align-items:center; background: #111;">
                 <div style="display:flex; flex-direction:column; gap:4px;">
                     <h1 style="margin:0; font-size:16px; font-weight:700;">Producer.ai Toolsuite</h1>
-                    <div style="font-size:11px; color:#aaa; font-weight:600; margin-top:2px;">Release Build v1.0 | Production v3.9</div>
+                    <div style="font-size:11px; color:#aaa; font-weight:600; margin-top:2px;">Release Build v1.0 | Production v4.0</div>
                     <div style="font-size:11px; color:#888; display:flex; align-items:center; gap:6px; margin-top:2px;">
                         <span>💳</span> <span id="sp-credits-text" style="color:#fff; font-family:monospace;">${STATE.credits} CR</span>
                     </div>
@@ -551,10 +839,24 @@
         });
     }
 
-    // --- Helper for truncating text ---
     function truncate(text, length) {
         if (text.length <= length) return text;
         return text.substring(0, length) + '...';
+    }
+
+    function countSelectedSongs() {
+        return document.querySelectorAll('input[type="checkbox"]:checked').length;
+    }
+
+    function updateSelectedCountUI() {
+        const modeSelect = document.getElementById('sp-dl-mode');
+        if (!modeSelect) return;
+
+        const selectedOption = modeSelect.querySelector('option[value="selected"]');
+        if (selectedOption) {
+            const count = countSelectedSongs();
+            selectedOption.innerText = `Selected Songs Only (${count})`;
+        }
     }
 
     function updateUIForPageType() {
@@ -575,6 +877,9 @@
         const stemsBtn = document.getElementById('sp-dl-stems-btn');
         if (stemsBtn) stemsBtn.onclick = handleStemsDownload;
 
+        const mhtmlBtn = document.getElementById('sp-dl-mhtml-btn');
+        if (mhtmlBtn) mhtmlBtn.onclick = handleMHTMLBatch;
+
         const modeSelect = document.getElementById('sp-dl-mode');
         if (modeSelect) {
             modeSelect.onchange = () => {
@@ -587,9 +892,11 @@
                 }
             };
         }
+
+        // Initial update of selected count
+        updateSelectedCountUI();
     }
 
-    // --- Helper for consistent header ---
     function renderPageHeader() {
         return `
             <div style="margin-bottom:24px;">
@@ -608,7 +915,6 @@
         const isPlaylist = STATE.pageType === 'playlist';
         const isSession = STATE.pageType === 'session';
 
-        // count visible songs for "all visible" logic (deduplicated)
         const songRows = Array.from(document.querySelectorAll('div[role="button"][aria-label^="Open details for"]'));
         const seenIds = new Set();
         let visibleSongs = 0;
@@ -626,16 +932,14 @@
             } catch (e) { }
         });
 
-        // define options with validity
         const options = [
             { id: 'session', label: `Full Session (${visibleSongs})`, valid: isSession, suffix: '(Session Page Only)' },
             { id: 'playlist', label: `Full Playlist (${visibleSongs})`, valid: isPlaylist, suffix: '(Playlist Page Only)' },
             { id: 'song', label: `Current Song`, valid: STATE.pageType === 'song', suffix: '(Song Page Only)' },
             { id: 'all', label: `All Visible Songs (${visibleSongs})`, valid: isLibrary, suffix: '(My Songs Page Only)' },
-            { id: 'selected', label: `Selected Songs Only`, valid: isLibrary, suffix: '(My Songs Page Only)' }
+            { id: 'selected', label: `Selected Songs Only (${countSelectedSongs()})`, valid: isLibrary, suffix: '(My Songs Page Only)' }
         ];
 
-        // sort: valid first
         options.sort((a, b) => b.valid - a.valid);
 
         let optionsHtml = '';
@@ -647,13 +951,11 @@
                 optionsHtml += `<option value="${opt.id}" ${selected}>${opt.label}</option>`;
                 firstValidSelected = true;
             } else {
-                // clean label for disabled state
                 let cleanLabel = opt.label.split('(')[0].trim();
                 optionsHtml += `<option value="${opt.id}" disabled>${cleanLabel} ${opt.suffix}</option>`;
             }
         });
 
-        // organization
         let safeTitle = (STATE.pageTitle || "Smart_Folder").replace(/"/g, '&quot;');
 
         let smartText = "Smart (Auto-Name)";
@@ -711,7 +1013,6 @@
                 transition: background 0.2s;
             " onmouseover="this.style.background='#e0e0e0'" onmouseout="this.style.background='#fff'">EXPORT AUDIO</button>
 
-            <!-- Stems Section -->
             <div style="margin-top:30px; padding-top:20px; border-top:1px solid #222;">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
                     <label style="font-size:11px; font-weight:700; color:#888;">STEMS</label>
@@ -739,45 +1040,45 @@
         if (isPageSong) {
             contentHtml = `
                 <div style="margin-bottom:15px; font-size:12px; color:#aaa;">Single Song Export</div>
-                <div style="margin-bottom:20px;">
-                    <label style="display:block; margin-bottom:8px; cursor:pointer;">
-                        <input type="radio" name="sp-exp-format" value="json" checked> JSON Format
-                    </label>
-                    <label style="display:block; cursor:pointer;">
-                        <input type="radio" name="sp-exp-format" value="txt"> Text Format
-                    </label>
+                <div style="font-size:11px; color:#666; margin-bottom:20px;">
+                    Exporting <b>JSON & CSV</b> containing:
+                    <ul style="padding-left:16px; margin-top:4px;">
+                        <li>Title, UUID, URL</li>
+                        <li>Sound Description, Model</li>
+                        <li>Negative Prompt, Lyrics</li>
+                    </ul>
                 </div>
-                <div style="font-size:11px; color:#666; margin-bottom:20px;">Exports track metadata only.</div>
             `;
         } else if (isPagePlaylist) {
             contentHtml = `
                 <div style="margin-bottom:15px; font-size:12px; color:#aaa;">Playlist Export</div>
-                <div style="margin-bottom:20px;">
-                     <label style="display:block; margin-bottom:8px; cursor:pointer;">
-                        <input type="radio" name="sp-exp-format" value="json" checked> JSON Format
-                    </label>
-                    <label style="display:block; cursor:pointer;">
-                        <input type="radio" name="sp-exp-format" value="csv"> CSV Format
-                    </label>
+                <div style="font-size:11px; color:#666; margin-bottom:20px;">
+                    Exporting <b>JSON & CSV</b> for all tracks.
                 </div>
-                <div style="font-size:11px; color:#666; margin-bottom:20px;">Exports metadata for all tracks in playlist.</div>
             `;
         } else if (isPageSession) {
             contentHtml = `
                 <div style="margin-bottom:15px; font-size:12px; color:#aaa;">Full Session Export</div>
-                <div style="margin-bottom:20px; background:#111; padding:10px; border-radius:4px; border:1px solid #333;">
-                    <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
-                        <input type="checkbox" checked disabled> 
-                        <span style="color:#fff;">All Session Data</span>
-                    </div>
-                    <ul style="margin:0; padding-left:24px; color:#888; font-size:11px;">
-                        <li>Metadata (CSV & JSON)</li>
-                        <li>Chat Logs (Separated & Raw)</li>
-                    </ul>
+                <div style="font-size:11px; color:#666; margin-bottom:20px;">
+                    Exporting <b>JSON & CSV</b> for entire session.
+                    <br><br>
+                    Includes Chat Log (Formatted & Raw).
                 </div>
             `;
         } else {
-            return `<div style="padding:20px; color:#666; text-align:center;">Open a Session, Playlist, or Song to use this tool.</div>`;
+            return `
+                <div style="padding:20px; color:#666; text-align:center;">
+                    Open a Session, Playlist, or Song to use this tool.
+                </div>
+                <div style="margin-top:20px; border-top:1px solid #333; padding-top:20px;">
+                     <button id="sp-dl-mhtml-btn" style="width:100%; padding:10px; background:#444; color:#fff; border:1px solid #555; border-radius:4px; cursor:pointer; font-size:12px;">
+                        SAVE ALL SESSIONS (MHTML)
+                    </button>
+                    <div style="font-size:10px; color:#666; margin-top:5px; text-align:center;">
+                        Automates sidebar scrolling & captures full pages.
+                    </div>
+                </div>
+            `;
         }
 
         return `
@@ -786,8 +1087,6 @@
             <button id="sp-run-export" style="width:100%; padding:14px; background:#fff; color:#000; font-weight:700; border:none; border-radius:4px; cursor:pointer;">EXPORT METADATA</button>
         `;
     }
-
-    // --- MISSING HANDLERS RESTORED ---
 
     async function handleDownload(e) {
         if (e) e.preventDefault();
@@ -809,6 +1108,28 @@
             if (mode === 'song') {
                 const uuid = window.location.pathname.split('/').pop();
                 songs.push({ uuid, element: document.body });
+            } else if (mode === 'selected') {
+                // Selected Songs Mode
+                // Find all checked checkboxes, get their parent row/song
+                const checkedBoxes = Array.from(document.querySelectorAll('input[type="checkbox"]:checked'));
+                const seen = new Set();
+
+                checkedBoxes.forEach(box => {
+                    // Traverse up to find the song row. Usually row -> cell -> checkbox
+                    const row = box.closest('div[role="row"]') || box.closest('div[role="button"]');
+                    if (row) {
+                        try {
+                            const link = row.querySelector('a[href^="/song/"]');
+                            if (link) {
+                                const uuid = link.getAttribute('href').split('/').pop();
+                                if (!seen.has(uuid)) {
+                                    seen.add(uuid);
+                                    songs.push({ uuid, element: row });
+                                }
+                            }
+                        } catch (e) { }
+                    }
+                });
             } else {
                 // List scraping (reusing robust logic)
                 const songRows = Array.from(document.querySelectorAll('div[role="button"][aria-label^="Open details for"]'));
@@ -829,10 +1150,11 @@
 
             if (songs.length === 0) throw new Error("No songs found.");
 
-            // Filter for 'selected' mode would go here if we implemented checkbox tracking
-            // For now 'all visible' is the main bulk mode.
-
             // 2. Processing
+            const token = getAuthToken();
+            if (!token) throw new Error("Could not find auth token. Please refresh the page.");
+
+            STATE.pageTitle = extractPageTitle(); // Refresh title
             const zip = new JSZip();
             const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
             const rootName = `${STATE.pageTitle}_Audio_${timestamp}`;
@@ -847,99 +1169,52 @@
 
                 // Title
                 let title = item.uuid;
-                if (item.element) {
+
+                if (mode === 'song') {
+                    // Single song mode: Use the robust global extractor
+                    title = extractPageTitle();
+                } else if (item.element) {
+                    // List mode: Extract from row element
                     const aria = item.element.getAttribute('aria-label');
                     if (aria && aria.startsWith("Open details for ")) {
                         title = aria.replace("Open details for ", "").trim();
-                    } else if (mode === 'song') {
-                        // Attempt to find title on song page
-                        const h1 = document.querySelector('h1');
-                        if (h1) title = h1.innerText.trim();
-                        else {
-                            const display = document.querySelector('.font-display');
-                            if (display) title = display.innerText.trim();
-                        }
+                    } else {
+                        // Fallback: Try H4 (common in list rows)
+                        const h4 = item.element.querySelector('h4');
+                        if (h4) title = h4.innerText.trim();
                     }
                 }
-                const safeName = title.replace(/[^a-z0-9-_ ]/gi, '').trim();
 
-                // URL
-                // We try to match what handleMasterExport does for consistency
-                let audioUrl = `https://cdn1.producer.ai/${item.uuid}.mp3`;
-                // If user wants wav, try wav
-                if (format === 'original') audioUrl = `https://cdn1.producer.ai/${item.uuid}.wav`;
+                // Final generic filter
+                if (!title || title === "Song" || /Producer\.?ai/i.test(title) || /Toolsuite/i.test(title)) {
+                    title = `Song_${item.uuid}`; // Fallback to safe UUID
+                }
 
+                const safeName = title.replace(/[\\/:*?"<>|]/g, '_').trim();
+
+                let successForThisSong = false;
+
+                // Try requested format first
                 try {
-                    // Try to fetch metadata first to get a direct URL if possible
-                    // This mirrors handleMasterExport logic
-                    let directAudioUrl = "";
+                    const blob = await fetchAudioBlob(item.uuid, (format === 'original' ? 'wav' : format), token);
+                    if (delivery === 'zip') folder.file(`${safeName}.${format === 'original' ? 'wav' : format}`, blob);
+                    else downloadBlob(blob, `${safeName}.${format === 'original' ? 'wav' : format}`);
+                    successForThisSong = true;
+                } catch (e) {
+                    // console.warn('Primary format failed', e);
+                }
+
+                // If original (wav) failed, try mp3 as fallback
+                if (!successForThisSong && format === 'original') {
                     try {
-                        const songPageResp = await fetch(`https://www.producer.ai/song/${item.uuid}`);
-                        if (songPageResp.ok) {
-                            const text = await songPageResp.text();
-                            const parser = new DOMParser();
-                            const doc = parser.parseFromString(text, 'text/html');
-                            const metaAudio = doc.querySelector('meta[property="og:audio"]') || doc.querySelector('meta[name="twitter:player:stream"]');
-                            if (metaAudio) directAudioUrl = metaAudio.content;
-
-                            // HYDRATION FALLBACK
-                            if (!directAudioUrl) {
-                                const script = doc.getElementById('__NEXT_DATA__');
-                                if (script) {
-                                    const json = JSON.parse(script.innerText);
-                                    const songData = json.props.pageProps.song || json.props.pageProps.clip;
-                                    if (songData && songData.audio_url) directAudioUrl = songData.audio_url;
-                                }
-                            }
-                        }
+                        const blob = await fetchAudioBlob(item.uuid, 'mp3', token);
+                        if (delivery === 'zip') folder.file(`${safeName}.mp3`, blob);
+                        else downloadBlob(blob, `${safeName}.mp3`);
+                        successForThisSong = true;
                     } catch (e) { }
+                }
 
-                    // Determine URL hierarchy
-                    // 1. If format is 'original' (WAV), try CDN WAV first.
-                    // 2. If valid direct URL found, use that.
-                    // 3. Fallback to CDN MP3.
-
-                    let successForThisSong = false;
-
-                    if (format === 'original') {
-                        // Try WAV first
-                        const wavUrl = `https://cdn1.producer.ai/${item.uuid}.wav`;
-                        const r = await fetch(wavUrl);
-                        if (r.ok) {
-                            const b = await r.blob();
-                            if (delivery === 'zip') folder.file(`${safeName}.wav`, b);
-                            else downloadBlob(b, `${safeName}.wav`);
-                            successForThisSong = true;
-                        }
-                    }
-
-                    // If WAV failed or wasn't requested, try MP3/Direct
-                    if (!successForThisSong) {
-                        const targetUrl = directAudioUrl || `https://cdn1.producer.ai/${item.uuid}.mp3`;
-                        const r = await fetch(targetUrl);
-                        if (r.ok) {
-                            const b = await r.blob();
-                            if (delivery === 'zip') folder.file(`${safeName}.mp3`, b);
-                            else downloadBlob(b, `${safeName}.mp3`);
-                            successForThisSong = true;
-                        } else {
-                            // If targetUrl failed and it was direct, try CDN fallback
-                            if (directAudioUrl) {
-                                const cdnUrl = `https://cdn1.producer.ai/${item.uuid}.mp3`;
-                                const r2 = await fetch(cdnUrl);
-                                if (r2.ok) {
-                                    const b2 = await r2.blob();
-                                    if (delivery === 'zip') folder.file(`${safeName}.mp3`, b2);
-                                    else downloadBlob(b2, `${safeName}.mp3`);
-                                    successForThisSong = true;
-                                }
-                            }
-                        }
-                    }
-
-                    if (successForThisSong) success++;
-
-                } catch (e) { console.error(e); }
+                if (successForThisSong) success++;
 
                 await new Promise(r => setTimeout(r, 100));
             }
@@ -947,7 +1222,7 @@
             if (delivery === 'zip' && success > 0) {
                 setBtn("Compressing...", true);
                 const content = await zip.generateAsync({ type: "blob" });
-                const a = document.createElement('a');
+                const a = document.createElement("a");
                 a.href = URL.createObjectURL(content);
                 a.download = `${rootName}.zip`;
                 a.click();
@@ -969,27 +1244,11 @@
 
     async function handleExport(e) {
         if (e) e.preventDefault();
-        console.log("[sidebar] export started");
 
-        // 0. check jszip
-        if (typeof JSZip === 'undefined') {
-            const msg = "JSZip library not loaded. Please reload the page.";
-            alert(msg);
-            console.error(msg);
-            return;
-        }
+        if (typeof JSZip === 'undefined') { alert("JSZip library not loaded. Please reload the page."); return; }
 
         const btn = document.getElementById('sp-run-export');
-        const setBtn = (text, disabled) => {
-            if (btn) {
-                btn.innerText = text;
-                btn.disabled = disabled;
-            }
-        };
-
-        // Get user preference
-        const formatInputs = document.querySelectorAll('input[name="sp-exp-format"]:checked');
-        const selectedFormat = formatInputs.length > 0 ? formatInputs[0].value : 'json'; // default
+        const setBtn = (text, disabled) => { if (btn) { btn.innerText = text; btn.disabled = disabled; } };
 
         setBtn("Initializing...", true);
 
@@ -1010,20 +1269,7 @@
             // --- SESSION SPECIFIC: Chat Logs ---
             if (pageType === 'session') {
                 setBtn("Scraping Chat...", true);
-                console.log("[sidebar] scraping chat...");
-
-                // Identify chat container
-                // We look for the scrolling container that holds the messages
-                const chatContainer = document.querySelector('main .flex-col') || document.body;
-
-                // Heuristic for messages: look for blocks with specific distinct styles
-                // User messages often have 'flex-row-reverse' or specific background colors
-                // Agent messages are usually left-aligned.
-                // We'll try to find all message bubbles.
-
                 const messageBlocks = Array.from(document.querySelectorAll('.group.w-full'));
-                // .group.w-full is a common pattern for chat rows in these frameworks
-
                 let log = "SESSION CHAT LOG\n=================\n\n";
                 let raw = "";
 
@@ -1031,18 +1277,11 @@
                     messageBlocks.forEach(block => {
                         const text = block.innerText;
                         raw += text + "\n\n";
-
-                        // Attempt to detect role
-                        // User usually has an avatar on the right or specific class
                         const isUser = block.querySelector('.flex-row-reverse') !== null || block.className.includes('justify-end');
                         const sender = isUser ? "USER" : "AGENT";
-
-                        // Clean text (remove timestamps if possible, though innerText is usually okay)
                         const cleanText = text.replace(/You said:|Agent said:/g, '').trim();
-
                         log += `[${sender}]\n${cleanText}\n-----------------\n`;
 
-                        // lyrics detection
                         const lower = text.toLowerCase();
                         if (lower.includes('[verse') || lower.includes('[chorus')) {
                             const snippet = text.substring(0, 30).replace(/\W/g, '_');
@@ -1050,7 +1289,6 @@
                         }
                     });
                 } else {
-                    // Fallback to simple text extraction if structure unknown
                     const allText = document.body.innerText;
                     raw = allText;
                     log = "Could not structurally parse chat. See raw log.";
@@ -1071,8 +1309,6 @@
                 const uuid = pathname.split('/').pop();
                 songsToExport.push({ uuid: uuid, element: document.body });
             } else {
-                // List scraping logic
-                // ... existing deduplication logic ...
                 const songRows = Array.from(document.querySelectorAll('div[role="button"][aria-label^="Open details for"]'));
                 songRows.forEach(row => {
                     try {
@@ -1084,17 +1320,6 @@
                         }
                     } catch (e) { }
                 });
-
-                if (songsToExport.length === 0) {
-                    // fallback strategy
-                    const queries = document.querySelectorAll('a[href^="/song/"]');
-                    queries.forEach(link => {
-                        const href = link.getAttribute('href').replace(/\/+$/, '');
-                        const uuid = href.split('/').pop();
-                        const row = link.closest('div[role="button"]') || link.closest('li') || link.parentElement;
-                        songsToExport.push({ uuid, element: row });
-                    });
-                }
             }
 
             // Deduplicate
@@ -1107,11 +1332,8 @@
                 }
             });
 
-            // Metadata Collection Loop
-            const metadataRecords = [];
             const lyricsFolder = dataFolder.folder("lyrics");
 
-            // Add chat lyrics
             if (lyricsMap.size > 0) {
                 lyricsMap.forEach((content, filename) => {
                     lyricsFolder.file(`${filename}.txt`, content);
@@ -1119,161 +1341,260 @@
             }
 
             if (uniqueSongs.length > 0) {
+                const token = getAuthToken();
                 let processedCount = 0;
+                const metadataRecords = [];
 
                 for (const item of uniqueSongs) {
                     processedCount++;
                     setBtn(`Processing ${processedCount}/${uniqueSongs.length}...`, true);
 
                     try {
-                        // --- 1. Scrape Basic Info (List Title) ---
                         let listTitle = "Untitled";
-                        const el = item.element;
-                        if (el) {
-                            const ariaLabel = el.getAttribute('aria-label');
-                            if (ariaLabel && ariaLabel.startsWith("Open details for ")) {
-                                listTitle = ariaLabel.replace("Open details for ", "").trim();
+                        if (item.element) {
+                            const aria = item.element.getAttribute('aria-label');
+                            if (aria && aria.startsWith("Open details for ")) {
+                                listTitle = aria.replace("Open details for ", "").trim();
                             }
-                            if (listTitle === "Untitled" || listTitle === "") {
-                                const h4 = el.querySelector('h4');
-                                const bold = el.querySelector('.font-bold');
-                                const truncate = el.querySelector('.truncate');
+                            if (listTitle === "Untitled") {
+                                const h4 = item.element.querySelector('h4');
                                 if (h4) listTitle = h4.innerText.trim();
-                                else if (bold) listTitle = bold.innerText.trim();
-                                else if (truncate) listTitle = truncate.innerText.trim();
                             }
                         }
 
-                        // --- 2. Deep Fetch ---
                         const songUrl = `https://www.producer.ai/song/${item.uuid}`;
-                        const resp = await fetch(songUrl);
-
+                        const resp = await fetch(songUrl, { headers: { 'Authorization': `Bearer ${token}` } });
                         let lyrics = "";
                         let sound = "";
                         let model = "unknown";
                         let deepTitle = "";
+                        let neg_prompt = "";
+                        let coverUrl = "";
 
                         if (resp.ok) {
                             const htmlText = await resp.text();
                             const parser = new DOMParser();
                             const doc = parser.parseFromString(htmlText, 'text/html');
 
-                            // Extraction
-                            const h1 = doc.querySelector('h1');
-                            if (h1) deepTitle = h1.innerText.trim();
+                            // --- 1. HYDRATION DATA (Primary Source) ---
+                            // This is the most reliable source for everything
+                            const script = doc.getElementById('__NEXT_DATA__');
+                            let hydrationData = null;
+                            if (script) {
+                                try {
+                                    const json = JSON.parse(script.innerText);
 
-                            const tagNodes = doc.querySelectorAll('.text-xs.bg-bg-3, a[href^="/?tags="]');
-                            const tags = [];
-                            tagNodes.forEach(t => { const txt = t.innerText.trim(); if (txt) tags.push(txt); });
-                            sound = tags.join(', ');
+                                    // 1. Try standard pageProps
+                                    if (json.props?.pageProps?.song) hydrationData = json.props.pageProps.song;
+                                    else if (json.props?.pageProps?.clip) hydrationData = json.props.pageProps.clip;
 
-                            const fullText = doc.body.innerText;
-                            if (fullText.includes("v3.5")) model = "v3.5";
-                            else if (fullText.includes("v3")) model = "v3";
-                            else if (fullText.includes("v2")) model = "v2";
+                                    // 2. Try SDC Query Cache (Deep Search via UUID)
+                                    // This is robust against schema changes (song vs riff vs unknown)
+                                    if (!hydrationData && json.props?.sdc?.queryClient?.queries) {
+                                        const queries = json.props.sdc.queryClient.queries;
+                                        const targetUuid = item.uuid;
 
-                            const lyricNodes = doc.querySelectorAll('.whitespace-pre-wrap');
-                            let maxLen = 0;
-                            lyricNodes.forEach(node => {
-                                const txt = node.innerText;
-                                if (txt.length > maxLen && (txt.includes('[') || txt.length > 50)) {
-                                    maxLen = txt.length;
-                                    lyrics = txt;
+                                        // Find query that contains our UUID in its hash OR data
+                                        const foundQuery = queries.find(q => {
+                                            // Check query key/hash
+                                            if (JSON.stringify(q.queryKey).includes(targetUuid)) return true;
+                                            // Check data ID
+                                            const d = q.state?.data;
+                                            if (d) {
+                                                if (d.id === targetUuid) return true;
+                                                if ((d.riff?.id === targetUuid) || (d.song?.id === targetUuid) || (d.clip?.id === targetUuid)) return true;
+                                            }
+                                            return false;
+                                        });
+
+                                        if (foundQuery) {
+                                            const d = foundQuery.state.data;
+                                            if (d.id === targetUuid) hydrationData = d;
+                                            else hydrationData = d.riff || d.song || d.clip || d;
+                                        }
+                                    }
+
+                                    if (hydrationData) {
+                                        if (hydrationData.title) deepTitle = hydrationData.title;
+
+                                        // Model Mapping
+                                        if (hydrationData.model_display_name) model = hydrationData.model_display_name;
+                                        else if (hydrationData.major_model_version) model = `${hydrationData.major_model_version}`;
+
+                                        // Metadata Mapping
+                                        // 1. Lyrics / Prompt
+                                        if (hydrationData.metadata?.prompt) lyrics = hydrationData.metadata.prompt;
+                                        else if (hydrationData.prompt) lyrics = hydrationData.prompt;
+
+                                        // 2. Sound Description
+                                        if (hydrationData.metadata?.tags) sound = hydrationData.metadata.tags;
+                                        else if (hydrationData.tags) sound = hydrationData.tags;
+                                        if (!sound && hydrationData.sound) sound = hydrationData.sound;
+
+                                        // 3. Negative Prompt (Strict)
+                                        if (hydrationData.metadata?.negative_prompt) neg_prompt = hydrationData.metadata.negative_prompt;
+                                        else if (hydrationData.metadata?.neg_prompt) neg_prompt = hydrationData.metadata.neg_prompt;
+
+                                        // 4. Other Fields
+                                        var vibe_input = hydrationData.metadata?.vibe_input || null;
+                                        var voice_input = hydrationData.metadata?.voice_input || null;
+                                        var strength = hydrationData.metadata?.strength || null;
+
+                                        // 5. Fallback Lyrics
+                                        if (!lyrics && hydrationData.lyrics) lyrics = hydrationData.lyrics;
+                                    }
+                                } catch (e) { console.error("Hydration parse error", e); }
+                            }
+
+                            // --- 2. DOM FALLBACKS (If Hydration Failed) ---
+                            // CLEANUP: Strict Case-insensitive removal of sidebar
+                            const sidebars = doc.querySelectorAll('div, aside, section');
+                            sidebars.forEach(el => {
+                                if (el.innerText && /More from/i.test(el.innerText)) {
+                                    el.remove(); // Nuke the sidebar from our parsed doc
                                 }
                             });
 
-                            // Hydration Fallback
-                            if (!lyrics || model === "unknown") {
-                                const script = doc.getElementById('__NEXT_DATA__');
-                                if (script) {
-                                    try {
-                                        const json = JSON.parse(script.innerText);
-                                        const pageProps = json.props.pageProps;
-                                        const songData = pageProps.song || pageProps.clip;
-                                        if (songData) {
-                                            if (songData.metadata?.prompt) lyrics = songData.metadata.prompt;
-                                            if (songData.metadata?.tags) sound = songData.metadata.tags;
-                                            if (songData.major_model_version) model = `${songData.major_model_version}`;
-                                            if (songData.title) deepTitle = songData.title;
-                                        }
-                                    } catch (e) { }
+                            // Title Fallback
+                            if (!deepTitle) {
+                                // 1. Primary: Role Textbox (most distinct)
+                                const titleEl = doc.querySelector('div[role="textbox"][contenteditable="true"]');
+                                if (titleEl && titleEl.innerText.trim()) deepTitle = titleEl.innerText.trim();
+
+                                // 2. Secondary: H1
+                                if (!deepTitle) {
+                                    const h1 = doc.querySelector('h1');
+                                    if (h1) deepTitle = h1.innerText.trim();
                                 }
                             }
+                            // Filter out generic titles (Robust)
+                            if (deepTitle && (/Producer\.?ai/i.test(deepTitle) || /Toolsuite/i.test(deepTitle) || deepTitle === "Song")) {
+                                deepTitle = "";
+                            }
+
+                            // Metadata Sections Fallback
+                            const findSectionContent = (labelText) => {
+                                // Strict equality check on text content to avoid partial matches
+                                const candidates = Array.from(doc.querySelectorAll('div, span, h2, h3, h4')).filter(el => el.innerText.trim().toLowerCase() === labelText.toLowerCase());
+                                for (const header of candidates) {
+                                    let sibling = header.nextElementSibling;
+                                    // Sometimes the content is in the parent's next sibling
+                                    if (!sibling && header.parentElement) {
+                                        sibling = header.parentElement.nextElementSibling;
+                                    }
+
+                                    if (sibling) {
+                                        let html = sibling.innerHTML;
+                                        html = html.replace(/<br\s*\/?>/gi, '\n');
+                                        html = html.replace(/<\/p>/gi, '\n\n');
+                                        const tmp = doc.createElement('div');
+                                        tmp.innerHTML = html;
+                                        return tmp.textContent.trim();
+                                    }
+                                }
+                                return "";
+                            };
+
+                            if (!sound) sound = findSectionContent("Sound");
+                            if (!neg_prompt) neg_prompt = findSectionContent("Negative prompt");
+                            if (!lyrics) lyrics = findSectionContent("Lyrics");
+
+                            // Model Fallback
+                            if (!model || model === "unknown") {
+                                // 1. Try "Model" label sibling
+                                const scrapedModel = findSectionContent("Model");
+                                if (scrapedModel) model = scrapedModel;
+
+                                // 2. Try text search for FUZZ / v3.5 using regex on CLEANED body
+                                if (!model || model === "unknown") {
+                                    const fullText = doc.body.innerText;
+                                    const modelMatch = fullText.match(/(FUZZ-[\w\d.-]+|v\d+(\.\d+)?)/i);
+                                    if (modelMatch) model = modelMatch[0];
+
+                                    if (fullText.includes("v3.5")) model = "v3.5";
+                                    else if (fullText.includes("v3")) model = "v3";
+                                }
+                            }
+
+                            // --- 4. COVER ART ---
+                            if (deepTitle) {
+                                const img = doc.querySelector(`img[alt="${deepTitle.replace(/"/g, '\\"')}"]`);
+                                if (img) coverUrl = img.src;
+                            }
+                            if (!coverUrl) {
+                                const mainImg = doc.querySelector('img.aspect-square.object-cover.h-full.w-full');
+                                if (mainImg) coverUrl = mainImg.src;
+                            }
+
                         }
 
-                        const finalTitle = (listTitle !== "Untitled" && listTitle !== "") ? listTitle : (deepTitle || "Untitled");
+                        const finalTitle = deepTitle || listTitle || "Untitled_Song";
 
-                        // Save Lyrics
                         if (lyrics) {
                             const safeTitle = finalTitle.replace(/[^a-z0-9]/gi, '_').substring(0, 40);
                             lyricsFolder.file(`${safeTitle}_${item.uuid}.txt`, lyrics);
                         }
 
-                        const record = {
-                            songUUID: item.uuid,
-                            songTitle: finalTitle,
-                            sound: sound,
+                        metadataRecords.push({
+                            title: finalTitle,
+                            uuid: item.uuid,
+                            sound_desc: sound,
+                            neg_prompt: neg_prompt,
+                            vibe_input: vibe_input || null,
+                            voice_input: voice_input || null,
+                            strength: strength || null,
                             model: model,
-                            playlistURL: (pageType === 'playlist') ? window.location.href : "",
-                            songURL: songUrl,
-                            hasLyrics: !!lyrics
-                        };
-
-                        metadataRecords.push(record);
-                        await new Promise(r => setTimeout(r, 200));
+                            url: songUrl,
+                            cover_url: coverUrl,
+                            lyrics: lyrics
+                        }); await new Promise(r => setTimeout(r, 200));
 
                     } catch (errLoop) {
                         console.error("Error processing song", item, errLoop);
-                        metadataRecords.push({ songUUID: item.uuid, songTitle: "Error", error: errLoop.message });
                     }
                 } // end loop
-            }
 
-            // --- EXPORT FORMATTING ---
-
-            // 1. Single Song Export (Song Page)
-            if (isSongLink) {
-                if (metadataRecords.length > 0) {
-                    const rec = metadataRecords[0];
-                    if (selectedFormat === 'json') {
-                        dataFolder.file(`${rec.songTitle}_metadata.json`, JSON.stringify(rec, null, 2));
-                    } else { // txt
-                        const txtContent = `Title: ${rec.songTitle}\nUUID: ${rec.songUUID}\nModel: ${rec.model}\nStyle: ${rec.sound}\nURL: ${rec.songURL}\n`;
-                        dataFolder.file(`${rec.songTitle}_metadata.txt`, txtContent);
-                    }
-                }
-            }
-            // 2. Playlist Export
-            else if (pageType === 'playlist') {
-                if (metadataRecords.length > 0) {
-                    if (selectedFormat === 'json') {
-                        dataFolder.file("playlist_metadata.json", JSON.stringify(metadataRecords, null, 2));
-                    } else { // csv
-                        const header = ["Title", "UUID", "Style", "Model", "URL"];
-                        const rows = [header.join(",")];
-                        metadataRecords.forEach(r => {
-                            rows.push(`"${r.songTitle}","${r.songUUID}","${r.sound}","${r.model}","${r.songURL}"`);
-                        });
-                        dataFolder.file("playlist_metadata.csv", rows.join("\n"));
-                    }
-                }
-            }
-            // 3. Session Export (All options)
-            else if (pageType === 'session') {
+                // Save Metadata (Strict JSON & CSV)
                 if (metadataRecords.length > 0) {
                     // JSON
-                    dataFolder.file("session_metadata.json", JSON.stringify(metadataRecords, null, 2));
-                    // CSV
-                    const header = ["Title", "UUID", "Style", "Model", "URL"];
+                    dataFolder.file("metadata.json", JSON.stringify(metadataRecords, null, 2));
+
+                    // CSV (Strict Columns)
+                    // CSV (Strict Columns)
+                    const header = ["title", "uuid", "URL", "sound_desc", "neg_prompt", "vibe_input", "voice_input", "strength", "model", "lyrics"];
                     const rows = [header.join(",")];
+
                     metadataRecords.forEach(r => {
-                        rows.push(`"${r.songTitle}","${r.songUUID}","${r.sound}","${r.model}","${r.songURL}"`);
+                        const title = r.title ? String(r.title) : "";
+                        const uuid = r.uuid ? String(r.uuid) : "";
+                        const url = r.url ? String(r.url) : "";
+                        const sound = r.sound_desc ? String(r.sound_desc) : "";
+                        const neg = r.neg_prompt ? String(r.neg_prompt) : "";
+                        const vibe = r.vibe_input ? String(r.vibe_input) : "";
+                        const voice = r.voice_input ? String(r.voice_input) : "";
+                        const str = r.strength ? String(r.strength) : "";
+                        const model = r.model ? String(r.model) : "";
+                        const lyrics = r.lyrics ? String(r.lyrics) : "";
+
+                        const row = [
+                            `"${title.replace(/"/g, '""')}"`,
+                            `"${uuid.replace(/"/g, '""')}"`,
+                            `"${url.replace(/"/g, '""')}"`,
+                            `"${sound.replace(/"/g, '""')}"`,
+                            `"${neg.replace(/"/g, '""')}"`,
+                            `"${vibe.replace(/"/g, '""')}"`,
+                            `"${voice.replace(/"/g, '""')}"`,
+                            `"${str}"`,
+                            `"${model.replace(/"/g, '""')}"`,
+                            `"${lyrics.replace(/"/g, '""').replace(/\n/g, '\\n')}"`
+                        ];
+                        rows.push(row.join(","));
                     });
-                    dataFolder.file("session_metadata.csv", rows.join("\n"));
+
+                    dataFolder.file("metadata.csv", rows.join("\n"));
                 }
             }
 
-            // generate zip
             setBtn("Compressing...", true);
             const content = await zip.generateAsync({ type: "blob" });
             const aa = document.createElement("a");
@@ -1286,41 +1607,199 @@
             console.error("[sidebar] export failed", err);
             alert("Export failed: " + err.message);
         } finally {
-            setBtn(`Export Metadata`, false);
+            setBtn(`EXPORT METADATA`, false);
         }
     }
 
+    async function handleMHTMLBatch(e) {
+        if (e) e.preventDefault();
+        if (!confirm("This will scroll through your ENTIRE session list and download each session as an MHTML file. This may take a long time. Continue?")) return;
+
+        const btn = document.getElementById('sp-dl-mhtml-btn');
+        const setBtn = (t) => { if (btn) btn.innerText = t; };
+
+        setBtn("Locating Sidebar...");
+
+        // 1. Find Scrollable Sidebar
+        // More robust heuristic for sidebar
+        let container = null;
+        const potentialSidebars = document.querySelectorAll('nav, div[class*="sidebar"], aside');
+        for (const el of potentialSidebars) {
+            if (el.innerText.includes('Sessions') || el.querySelectorAll('a[href^="/session/"]').length > 0) {
+                container = el;
+                // verify it scrolls
+                if (getComputedStyle(el).overflowY === 'auto' || getComputedStyle(el).overflowY === 'scroll') break;
+            }
+        }
+
+        // Fallback: finding parent of a known link
+        if (!container) {
+            const link = document.querySelector('a[href^="/session/"]');
+            if (link) {
+                // traverse up until we find a scroll container
+                let p = link.parentElement;
+                while (p && p !== document.body) {
+                    const style = getComputedStyle(p);
+                    if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
+                        container = p;
+                        break;
+                    }
+                    p = p.parentElement;
+                }
+            }
+        }
+
+        if (!container) { alert("Could not locate sidebar container."); setBtn("Save All (MHTML)"); return; }
+
+        setBtn("Scrolling...");
+
+        // 2. Automate Scrolling
+        const collectedUrls = new Set();
+        let lastScroll = -1;
+        let sameScrollCount = 0;
+
+        const scan = () => {
+            const links = container.querySelectorAll('a[href^="/session/"]');
+            links.forEach(a => collectedUrls.add(a.href));
+        };
+
+        // Scroll loop
+        while (true) {
+            scan();
+            setBtn(`Found ${collectedUrls.size} sessions...`);
+
+            lastScroll = container.scrollTop;
+            container.scrollTop += 1500; // Aggressive scroll
+
+            await new Promise(r => setTimeout(r, 1000)); // Wait for lazy load
+
+            if (container.scrollTop === lastScroll) {
+                sameScrollCount++;
+                if (sameScrollCount > 2) break; // End of list
+            } else {
+                sameScrollCount = 0;
+            }
+        }
+
+        if (collectedUrls.size === 0) { alert("No sessions found."); setBtn("Save All (MHTML)"); return; }
+
+        // 3. Send to Background
+        setBtn(`Processing ${collectedUrls.size} sessions...`);
+
+        chrome.runtime.sendMessage({
+            type: "DOWNLOAD_ADVANCED",
+            jobType: "mhtml_batch",
+            urls: Array.from(collectedUrls)
+        }, (resp) => {
+            if (resp && resp.success) {
+                setBtn("Done!");
+                alert(`MHTML Batch Complete! \nProcessed: ${resp.processed}\nErrors: ${resp.errors}`);
+            } else {
+                setBtn("Failed");
+                alert("Batch Failed: " + (resp?.error || "Unknown Error"));
+            }
+            setTimeout(() => setBtn("Save All (MHTML)"), 3000);
+        });
+    }
+
     function extractPageTitle() {
+        console.log("ANTIGRAVITY: Extracting Page Title...");
+
+        // 1. Session Page Specific (Editable Input)
+        if (window.location.pathname.includes('/session/')) {
+            // Look for the main title input
+            const titleInput = document.querySelector('input[placeholder="Name your session"]');
+            if (titleInput && titleInput.value && titleInput.value.trim()) {
+                console.log("ANTIGRAVITY: Found Session Input Title:", titleInput.value);
+                return titleInput.value.trim();
+            }
+
+            // Fallback: value of any input in the top header area
+            const headerInputs = document.querySelectorAll('header input');
+            for (const input of headerInputs) {
+                if (input.value && input.value.trim() && input.value !== "Name your session") {
+                    return input.value.trim();
+                }
+            }
+        }
+
+        // 2. Try editable div (Song Page)
+        const titleEl = document.querySelector('div[role="textbox"][contenteditable="true"]');
+        if (titleEl && titleEl.innerText.trim()) {
+            const t = titleEl.innerText.trim();
+            if (t !== "Song" && t !== "Producerai Toolsuite") {
+                console.log("ANTIGRAVITY: Found Editable Title:", t);
+                return t;
+            }
+        }
+
+        // 3. Try H1
+        const h1 = document.querySelector('h1');
+        if (h1 && h1.innerText.trim()) {
+            const t = h1.innerText.trim();
+            if (t !== "Song" && t !== "Producerai Toolsuite") {
+                // Avoid "Create" or generic H1s
+                if (!["Create", "Home", "Library"].includes(t)) {
+                    console.log("ANTIGRAVITY: Found H1 Title:", t);
+                    return t;
+                }
+            }
+        }
+
+        // 4. Hydration Fallback (most robust for Songs)
         try {
-            // User-provided selector for session sidebar item
-            const userSel = '.flex.items-center.gap-2.overflow-hidden.p-2.transition-colors.hover\\:bg-bg-2.data-\\[state\\=open\\]\\:bg-bg-2.cursor-pointer.rounded';
-            const sessionNameEl = document.querySelector(userSel);
-            if (sessionNameEl) {
-                return sessionNameEl.innerText.trim();
+            const script = document.getElementById('__NEXT_DATA__');
+            if (script) {
+                const json = JSON.parse(script.innerText);
+                let songTitle = null;
+
+                // 1. Standard props
+                if (json.props?.pageProps?.song?.title) songTitle = json.props.pageProps.song.title;
+                else if (json.props?.pageProps?.clip?.title) songTitle = json.props.pageProps.clip.title;
+
+                // 2. SDC Cache (Deep UUID Search) - simplified for extractPageTitle
+                const pathSegments = window.location.pathname.split('/');
+                const uuidIndex = pathSegments.indexOf('song') + 1;
+                const currentUuid = (uuidIndex > 0 && uuidIndex < pathSegments.length) ? pathSegments[uuidIndex] : null;
+
+                if (!songTitle && currentUuid && json.props?.sdc?.queryClient?.queries) {
+                    const queries = json.props.sdc.queryClient.queries;
+                    const foundQuery = queries.find(q => {
+                        if (JSON.stringify(q.queryKey).includes(currentUuid)) return true;
+                        return false;
+                    });
+                    if (foundQuery) {
+                        const d = foundQuery.state.data;
+                        if (d) {
+                            if (d.title) songTitle = d.title;
+                            else if (d.song?.title) songTitle = d.song.title;
+                        }
+                    }
+                }
+
+                if (songTitle && songTitle !== "Song" && songTitle !== "Producerai Toolsuite") {
+                    console.log("ANTIGRAVITY: Found Hydration Title:", songTitle);
+                    return songTitle;
+                }
             }
         } catch (e) { }
 
-        const displayTitle = document.querySelector('.font-display') || document.querySelector('div[role="textbox"]');
-        if (displayTitle) return displayTitle.innerText.trim();
+        // 5. Session Name fallback (Legacy / Other selectors)
+        try {
+            const userSel = '.flex.items-center.gap-2.overflow-hidden.p-2.transition-colors.hover\\:bg-bg-2.data-\\[state\\=open\\]\\:bg-bg-2.cursor-pointer.rounded';
+            const sessionNameEl = document.querySelector(userSel);
+            if (sessionNameEl) return sessionNameEl.innerText.trim();
+        } catch (e) { }
 
-        const h1 = document.querySelector('h1');
-        if (h1) return h1.innerText.trim();
-
-        if (document.title && !document.title.includes('Producer.ai')) {
-            return document.title;
-        }
-
-        return "Producer_Session";
+        return "Untitled";
     }
 
     function analyzePage() {
         const path = window.location.pathname;
         let title = "Untitled";
 
-        // force update detection
         STATE.pageType = 'unknown';
 
-        // 1. identify page type strict
         if (path.includes('/library/my-songs')) {
             STATE.pageType = 'library';
             title = "My Songs";
@@ -1328,22 +1807,17 @@
             STATE.pageType = 'session';
         } else if (path.includes('/song/')) {
             STATE.pageType = 'song';
-            title = "Song";
+            // title = "Song"; // DELETED to allow extraction
         } else if (path.includes('/playlist/')) {
             STATE.pageType = 'playlist';
         } else {
             STATE.pageType = 'other';
         }
 
-        // 2. scrape title (if not already set)
         if (title === "Untitled") {
-            // unified strategy (restoring logic that worked for playlists)
-            // search for .font-display (headers) or editable titles
-            const displayTitle = document.querySelector('.font-display') || document.querySelector('div[role="textbox"]');
             title = extractPageTitle();
         }
 
-        // 3. clean up common prefixes/suffixes & fallbacks
         if (title.startsWith("Producer.ai") || title === "Toolsuite") {
             const prefix = STATE.pageType === 'playlist' ? 'Playlist_' : 'Session_';
             title = prefix + new Date().getTime().toString().slice(-6);
@@ -1352,49 +1826,49 @@
         STATE.pageTitle = title.replace(/[\/\\:*?"<>|]/g, '_');
     }
 
-    function truncate(str, n) {
-        return (str.length > n) ? str.substr(0, n - 1) + '...' : str;
-    }
-
-    function getAuthToken() {
-        try {
-            const cookies = document.cookie.split('; ');
-            const authCookies = cookies.filter(c => c.trim().startsWith('sb-api-auth-token.'));
-            if (authCookies.length === 0) return null;
-            authCookies.sort();
-            const fullValue = authCookies.map(c => c.split('=')[1]).join('');
-            return JSON.parse(atob(fullValue.replace('base64-', ''))).access_token;
-        } catch (e) { return null; }
-    }
-
+    // --- INITIALIZATION ---
+    analyzePage();
+    updateUIForPageType();
     initCredits();
 
-    // live update (spa navigation)
+    // Polling for URL changes (SPA Navigation)
+    // Polling for URL changes (SPA Navigation)
     setInterval(() => {
         const currentPath = window.location.pathname;
-        if (currentPath !== STATE.lastPath) {
-            STATE.lastPath = currentPath;
+        const titleBad = !STATE.pageTitle || STATE.pageTitle === "Untitled" || STATE.pageTitle === "Song";
+
+        // If path changed OR title is still bad (loading race condition), re-analyze
+        if (currentPath !== STATE.lastPath || titleBad) {
+
+            // Only update lastPath if it actually changed
+            if (currentPath !== STATE.lastPath) STATE.lastPath = currentPath;
+
+            const oldTitle = STATE.pageTitle;
             analyzePage();
-            // if sidebar is open, refresh ui
-            const sidebar = document.getElementById('sp-sidebar');
-            if (sidebar && sidebar.style.right === '0px') {
-                updateUIForPageType();
+
+            // If title changed or path changed, update UI
+            if (currentPath !== STATE.lastPath || STATE.pageTitle !== oldTitle) {
+                const sidebar = document.getElementById('sp-sidebar');
+                if (sidebar && sidebar.style.right === '0px') {
+                    updateUIForPageType();
+                }
             }
         }
 
-        // also periodically check for song loading if in focus mode ui
-        if (STATE.isOpen) {
-            // check for changes in visible count
-            const songRows = document.querySelectorAll('div[role="button"][aria-label^="Open details for"]');
+        // Always update selected count if sidebar is open
+        const sidebar = document.getElementById('sp-sidebar');
+        if (sidebar && sidebar.style.right === '0px') {
+            updateSelectedCountUI();
+        }
 
-            // simple check: if raw count changes drastically, update.
-            // (we don't want to run full dedup every 500ms if not needed)
+        // Detect new songs loading in lists
+        if (STATE.isOpen) {
+            const songRows = document.querySelectorAll('div[role="button"][aria-label^="Open details for"]');
             if (window._lastRawCount !== songRows.length) {
                 window._lastRawCount = songRows.length;
                 updateUIForPageType();
             }
         }
-
     }, 1000);
 
 })();

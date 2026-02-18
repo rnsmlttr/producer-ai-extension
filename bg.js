@@ -43,6 +43,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         handleAdvancedDownload(request, sendResponse);
         return true; // keep channel open for async response
     }
+
+    // 4. Default return
+    return true; // Keep channel open for any other async messages
 });
 
 // --- advanced download logic ---
@@ -55,6 +58,8 @@ async function handleAdvancedDownload(req, sendResponse) {
             await processManifest(req, sendResponse);
         } else if (jobType === 'stems') {
             await processStems(req, sendResponse);
+        } else if (jobType === 'mhtml_batch') {
+            await processMHTMLBatch(req, sendResponse);
         } else {
             sendResponse({ success: false, error: "Unknown job type" });
         }
@@ -239,6 +244,104 @@ async function processStems(req, sendResponse) {
     } catch (e) {
         sendResponse({ success: false, error: e.message });
     }
+}
+
+// process mhtml batch export
+async function processMHTMLBatch(req, sendResponse) {
+    const { urls } = req;
+    let processed = 0;
+    let errors = 0;
+
+    // We process sequentially to not overwhelm browser
+    for (const url of urls) {
+        let tab; // Declare tab outside try block so it's accessible in catch
+        try {
+            // 1. Create tab background
+            // We use 'active: false' but sometimes page capture needs active tab?
+            // Actually pageCapture works on background tabs usually.
+            tab = await chrome.tabs.create({ url: url, active: false });
+
+            // 2. Wait for load
+            // We'll wait for 'complete' status + extra buffer for hydration
+            await new Promise((resolve) => {
+                const listener = (tabId, info) => {
+                    if (tabId === tab.id && info.status === 'complete') {
+                        chrome.tabs.onUpdated.removeListener(listener);
+                        resolve();
+                    }
+                };
+                chrome.tabs.onUpdated.addListener(listener);
+                // specialized timeout - if not complete in 15s, proceed anyway
+                setTimeout(() => {
+                    chrome.tabs.onUpdated.removeListener(listener);
+                    resolve();
+                }, 15000);
+            });
+
+            // Extra buffer for hydration
+            await new Promise(r => setTimeout(r, 4000));
+
+            // 3. Capture
+            const mhtmlBlob = await new Promise((resolve, reject) => {
+                chrome.pageCapture.saveAsMHTML({ tabId: tab.id }, (blob) => {
+                    if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
+                    else resolve(blob);
+                });
+            });
+
+            // 4. Download
+            // Convert blob to data URL (service workers don't have URL.createObjectURL)
+            const segment = url.split('/').pop() || 'session';
+            const filename = `Session_${segment}_${new Date().getTime()}.mhtml`;
+
+            // Convert blob to data URL using FileReader
+            const dataUrl = await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result);
+                reader.onerror = reject;
+                reader.readAsDataURL(mhtmlBlob);
+            });
+
+            await new Promise((resolve, reject) => {
+                chrome.downloads.download({
+                    url: dataUrl,
+                    filename: `ProducerAI/Sessions/${filename}`,
+                    saveAs: false
+                }, (id) => {
+                    if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
+                    else resolve(id);
+                });
+            });
+
+            // 5. Cleanup - Close the tab after download completes
+            try {
+                await chrome.tabs.remove(tab.id);
+            } catch (tabError) {
+                console.error('Failed to close tab:', tabError);
+            }
+
+            processed++;
+            console.log(`MHTML: Saved ${processed}/${urls.length}`);
+
+        } catch (e) {
+            console.error(`MHTML Error for ${url}:`, e);
+            errors++;
+
+            // Try to close tab even if export failed
+            try {
+                if (tab && tab.id) {
+                    await chrome.tabs.remove(tab.id);
+                }
+            } catch (cleanupError) {
+                console.error('Failed to close tab during error cleanup:', cleanupError);
+            }
+        }
+
+        // Pacing
+        await new Promise(r => setTimeout(r, 1000));
+    }
+
+    sendResponse({ success: true, processed, errors });
 }
 
 // helper: fetch with auth
