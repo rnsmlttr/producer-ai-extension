@@ -25,12 +25,12 @@ Located in the **AUDIO** tab, this tool gives you granular control over your mus
   - **Full Playlist:** Downloads every track in the current playlist.
   - **Current Song:** Downloads only the song you are currently viewing (Song Page only).
   - **All Visible Songs:** Downloads every song currently visible on the page (Library Page Only).
-  - **Selected Songs Only:** Downloads only the specific tracks you have checke (Library Page Only).
+  - *Known Issue* **Selected Songs Only:** Downloads only the specific tracks you have checke (Library Page Only).
 
 - **Audio Format:**
   - **WAV (Lossless):** Downloads the original uncompressed WAV file.
   - **MP3 (320kbps):** Downloads the standard high-quality MP3.
-  - **M4A:** Downloads the M4A format used for quick storage & audio streaming on-site.
+  - **M4A (Lossy):** Downloads the M4A format used for quick storage & audio streaming on-site.
 
 - **Delivery:**
   - **Individual Files:** Downloads each track as a separate file to your browser's download folder.
