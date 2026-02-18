@@ -63,10 +63,10 @@ Located in the **AUDIO** tab, this tool gives you granular control over your mus
 Follow the standard [Installation](#-installation) instructions above.
 
 ### Firefox
-1. Important: Rename manifest_firefox.json to manifest.json. (You may want to backup the original manifest.json first).
-2. Open Firefox and go to about:debugging#/runtime/this-firefox.
-3. Click "Load Temporary Add-on...".
-4. Select the manifest.json file.
+1. **Important**: Rename `manifest_firefox.json` to `manifest.json`. (You may want to backup the original `manifest.json` first).
+2. Open Firefox and go to `about:debugging#/runtime/this-firefox`.
+3. Click **"Load Temporary Add-on..."**.
+4. Select the `manifest.json` file.
 
 ### Safari (macOS)
 1. You will need Xcode installed.
