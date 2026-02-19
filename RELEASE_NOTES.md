@@ -3,16 +3,16 @@
 ## [v4.1.2] - 2026-02-19
 
 ### Added
-- **Stop Button:** Added a red "STOP" button to the status bar during active downloads/exports. Allows immediate cancellation of the queue.
+- **Stop Button:** Added a red 'STOP' button to the status bar during active downloads/exports. Allows immediate cancellation of the queue.
 - **Retry Logic:** Implemented `fetchWithRetry` to handle 500-series errors from the API, preventing batch failures.
 
 ### Changed
-- **Profile Page Support:** Sidebar now intelligently detects Profile pages (`/username`) and uses the username for file naming instead of "Session_...".
-- **Rebranding:** Removed "(Clean)" from extension name in manifest.
+- **Profile Page Support:** Sidebar now intelligently detects Profile pages (`/username`) and uses the username for file naming instead of 'Session_...'.
+- **Rebranding:** Removed '(Clean)' from extension name in manifest.
 - **Version Bump:** Updated to v4.1.2.
 
 ### Fixed
-- **Connection Error:** Suppressed "Receiving end does not exist" errors in `bg.js`.
+- **Connection Error:** Suppressed 'Receiving end does not exist' errors in `bg.js`.
 - **Fetch Error:** Fixed unhandled promise rejection during metadata fetch in `handleMasterExport`.
 
 ## [v4.1.1] - 2026-02-18
