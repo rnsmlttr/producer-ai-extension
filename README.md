@@ -36,11 +36,16 @@ Located in the **AUDIO** tab, this tool gives you granular control over your mus
     - *New in v4.1:* Now saves to `Downloads/Session Name/` folder!
   - **Zip Archive:** Packages all tracks into a single ZIP file for easy management.
 
-## 📦 What's New in v4.1.0
-- **Smart Folder Organization:** "Smart (Auto-Name)" option now uses clean session titles and removes timestamps.
+## 📦 What's New in v4.1.1
+- **Dual Export Buttons:** Explicit "WAV" and "MP3" buttons for the full export package.
+- **Clarified UI:** Renamed tabs to "Download (Audio Only)" and "Download (Metadata Only)" for better clarity.
+- **Metadata Fixes:** Corrected URL generation for Songs, Playlists, and Sessions in CSV/JSON exports.
+- **Code Hygiene:** Removed internal logging and cleanup.
+
+### v4.1.0 Highlights
+- **Smart Folder Organization:** "Smart (Auto-Name)" option now uses clean session titles.
 - **Improved Audio Export:** Individual files are now organized into named folders.
 - **Relaxed Sanitization:** Filenames now support characters like `#` and `—`.
-- **UI Fixes:** Fixed stale options in dropdowns when navigating between pages.
 
 ## 📥 Installation
 
