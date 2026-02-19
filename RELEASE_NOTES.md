@@ -1,5 +1,16 @@
 # Release Notes
 
+## [v4.1.3] - 2026-02-19
+
+### Fixed
+- **Audio Export Bug:** Fixed `ReferenceError` where Metadata Export attempted to download audio without a valid format.
+- **Full Export:** Verified audio inclusion in the "Full Export Package".
+
+### Changed
+- **UI Refinement:** Renamed tabs to **AUDIO** and **METADATA**.
+- **UI Refinement:** Renamed buttons to **DOWNLOAD AUDIO ONLY** and **DOWNLOAD METADATA ONLY**.
+- **Stop Button:** Added Stop functionality to Metadata Export.
+
 ## [v4.1.2] - 2026-02-19
 
 ### Added

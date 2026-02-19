@@ -1,6 +1,6 @@
 # Producer.ai Toolsuite
 
-**Release Build v4.1.2**
+**Release Build v4.1.3**
 
 The **Producer.ai Toolsuite** is a powerful browser extension that transforms your workflow on Producer.ai. It provides a comprehensive set of tools for downloading audio, exporting metadata, and archiving entire sessions.
 
@@ -36,8 +36,12 @@ Located in the **AUDIO** tab, this tool gives you granular control over your mus
     - *New in v4.1:* Now saves to `Downloads/Session Name/` folder!
   - **Zip Archive:** Packages all tracks into a single ZIP file for easy management.
 
-## 📦 What's New in v4.1.2
-- **Stop Button:** A new "STOP" button in the status bar to cancel long-running operations.
+## 📦 What's New in v4.1.3
+- **Audio Fix:** Fixed critical bug where metadata exports were crashing due to audio configuration.
+- **UI Refinement:** Clearer tab and button naming ("AUDIO" / "METADATA").
+- **Stop Button:** Metadata exports can now be stopped mid-process.
+
+### v4.1.2 Highlights
 - **Profile Page Support:** Sidebar now correctly detects Profile pages and uses the username as the folder/file prefix.
 - **Robust Fetching:** Added auto-retry logic to handle occasional network errors when fetching song metadata.
 - **Connection Fixes:** Resolved background script errors for smoother operation.

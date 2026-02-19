@@ -270,7 +270,7 @@
             if (btnMp3) btnMp3.disabled = dis;
         };
 
-        setBtn("Initializing V4.1.2...", true); // VISIBLE VERSION MARKER
+        setBtn("Initializing V4.1.3...", true); // VISIBLE VERSION MARKER
 
         // CONFIGURATION
         const BATCH_SIZE = 50;
@@ -815,7 +815,7 @@
             <div style="padding: 20px; border-bottom: 1px solid #222; display:flex; justify-content:space-between; align-items:center; background: #111;">
                 <div style="display:flex; flex-direction:column; gap:4px;">
                     <h1 style="margin:0; font-size:16px; font-weight:700;">Producer.ai Toolsuite</h1>
-                    <div style="font-size:11px; color:#aaa; font-weight:600; margin-top:2px;">Release Build v4.1.2</div>
+                    <div style="font-size:11px; color:#aaa; font-weight:600; margin-top:2px;">Release Build v4.1.3</div>
                     <div style="font-size:11px; color:#888; display:flex; align-items:center; gap:6px; margin-top:2px;">
                         <span>💳</span> <span id="sp-credits-text" style="color:#fff; font-family:monospace;">${STATE.credits} CR</span>
                     </div>
@@ -852,8 +852,8 @@
             </div>
 
             <div style="display:flex; border-bottom: 1px solid #222; background: #0d0d0d;">
-                <button class="sp-tab-btn active" data-tab="download" style="flex:1; padding:12px; background:transparent; border:none; color:#fff; border-bottom:2px solid #fff; cursor:pointer; font-weight:600; text-transform:uppercase; font-size:12px;">Download (Audio Only)</button>
-                <button class="sp-tab-btn" data-tab="export" style="flex:1; padding:12px; background:transparent; border:none; color:#666; border-bottom:2px solid transparent; cursor:pointer; font-weight:600; text-transform:uppercase; font-size:12px;">Download (Metadata Only)</button>
+                <button class="sp-tab-btn active" data-tab="download" style="flex:1; padding:12px; background:transparent; border:none; color:#fff; border-bottom:2px solid #fff; cursor:pointer; font-weight:600; text-transform:uppercase; font-size:12px;">AUDIO</button>
+                <button class="sp-tab-btn" data-tab="export" style="flex:1; padding:12px; background:transparent; border:none; color:#666; border-bottom:2px solid transparent; cursor:pointer; font-weight:600; text-transform:uppercase; font-size:12px;">METADATA</button>
             </div>
 
             <div id="sp-tab-content-download" class="sp-tab-content" style="flex:1; overflow-y:auto; padding:20px;"></div>
@@ -1117,7 +1117,7 @@
                 width:100%; padding:14px; background:#fff; color:#000; font-weight:700;
                 border:none; border-radius:4px; cursor:pointer; text-transform:uppercase; margin-top:4px;
                 transition: background 0.2s;
-            " onmouseover="this.style.background='#e0e0e0'" onmouseout="this.style.background='#fff'">EXPORT AUDIO</button>
+            " onmouseover="this.style.background='#e0e0e0'" onmouseout="this.style.background='#fff'">DOWNLOAD AUDIO ONLY</button>
         `;
     }
 
@@ -1156,6 +1156,13 @@
                     Includes Chat Log (Formatted & Raw).
                 </div>
             `;
+        } else if (STATE.pageType === 'profile') {
+            contentHtml = `
+                <div style="margin-bottom:15px; font-size:12px; color:#aaa;">Profile Export</div>
+                <div style="font-size:11px; color:#666; margin-bottom:20px;">
+                    Exporting <b>JSON & CSV</b> for all visible tracks on this profile.
+                </div>
+            `;
         } else {
             return `
                 <div style="padding:20px; color:#666; text-align:center;">
@@ -1175,7 +1182,7 @@
         return `
             ${renderPageHeader()}
             ${contentHtml}
-            <button id="sp-run-export" style="width:100%; padding:14px; background:#fff; color:#000; font-weight:700; border:none; border-radius:4px; cursor:pointer;">EXPORT METADATA</button>
+            <button id="sp-run-export" style="width:100%; padding:14px; background:#fff; color:#000; font-weight:700; border:none; border-radius:4px; cursor:pointer;">DOWNLOAD METADATA ONLY</button>
         `;
     }
 
@@ -1409,6 +1416,12 @@
         STATE.isStopping = false; // Reset stop flag
         setBtn("Initializing...", true);
 
+        // Show Status Bar
+        const statusBar = document.getElementById('sp-status-bar');
+        const idleFooter = document.getElementById('sp-footer-idle');
+        if (statusBar) statusBar.style.display = 'block';
+        if (idleFooter) idleFooter.style.display = 'none';
+
         try {
             const zip = new JSZip();
 
@@ -1558,6 +1571,7 @@
                 const metadataRecords = [];
 
                 for (const item of uniqueSongs) {
+                    if (STATE.isStopping) break; // Check Stop Flag
                     processedCount++;
                     setBtn(`Processing ${processedCount}/${uniqueSongs.length}...`, true);
 
@@ -1768,6 +1782,8 @@
                             lyricsFolder.file(`${safeTitle}_${item.uuid}.txt`, lyrics);
                         }
 
+
+
                         metadataRecords.push({
                             title: finalTitle,
                             uuid: item.uuid,
@@ -1848,7 +1864,12 @@
             console.error("[sidebar] export failed", err);
             alert("Export failed: " + err.message);
         } finally {
-            setBtn(`EXPORT METADATA`, false);
+            setBtn("DOWNLOAD METADATA ONLY", false);
+            // Hide Status Bar
+            const statusBar = document.getElementById('sp-status-bar');
+            const idleFooter = document.getElementById('sp-footer-idle');
+            if (statusBar) statusBar.style.display = 'none';
+            if (idleFooter) idleFooter.style.display = 'block';
         }
     }
 
