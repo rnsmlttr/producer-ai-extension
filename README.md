@@ -36,7 +36,13 @@ Located in the **AUDIO** tab, this tool gives you granular control over your mus
     - *New in v4.1:* Now saves to `Downloads/Session Name/` folder!
   - **Zip Archive:** Packages all tracks into a single ZIP file for easy management.
 
-## 📦 What's New in v4.1.1
+## 📦 What's New in v4.1.2
+- **Stop Button:** A new "STOP" button in the status bar to cancel long-running operations.
+- **Profile Page Support:** Sidebar now correctly detects Profile pages and uses the username as the folder/file prefix.
+- **Robust Fetching:** Added auto-retry logic to handle occasional network errors when fetching song metadata.
+- **Connection Fixes:** Resolved background script errors for smoother operation.
+
+### v4.1.1 Highlights
 - **Dual Export Buttons:** Explicit "WAV" and "MP3" buttons for the full export package.
 - **Clarified UI:** Renamed tabs to "Download (Audio Only)" and "Download (Metadata Only)" for better clarity.
 - **Metadata Fixes:** Corrected URL generation for Songs, Playlists, and Sessions in CSV/JSON exports.
