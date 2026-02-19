@@ -59,6 +59,27 @@
         return await resp.blob();
     }
 
+    // --- Retry Helper for JSON Metadata ---
+    async function fetchWithRetry(url, options, retries = 1) {
+        try {
+            const r = await fetch(url, options);
+            if (!r.ok) {
+                if (retries > 0 && r.status >= 500) {
+                    await new Promise(res => setTimeout(res, 500));
+                    return fetchWithRetry(url, options, retries - 1);
+                }
+                throw new Error(`Status ${r.status}`);
+            }
+            return r;
+        } catch (e) {
+            if (retries > 0) {
+                await new Promise(res => setTimeout(res, 500));
+                return fetchWithRetry(url, options, retries - 1);
+            }
+            throw e;
+        }
+    }
+
     // credits logic
     async function initCredits() {
         try {
@@ -249,7 +270,7 @@
             if (btnMp3) btnMp3.disabled = dis;
         };
 
-        setBtn("Initializing V4.0...", true); // VISIBLE VERSION MARKER
+        setBtn("Initializing V4.1.2...", true); // VISIBLE VERSION MARKER
 
         // CONFIGURATION
         const BATCH_SIZE = 50;
@@ -261,6 +282,12 @@
         try {
             STATE.pageTitle = extractPageTitle(); // Refresh title
             updateUIForPageType();
+
+            // Show Status Bar
+            const statusBar = document.getElementById('sp-status-bar');
+            const idleFooter = document.getElementById('sp-footer-idle');
+            if (statusBar) statusBar.style.display = 'block';
+            if (idleFooter) idleFooter.style.display = 'none';
 
             const token = getAuthToken();
             if (!token) throw new Error("Not authenticated. Please refresh.");
@@ -421,6 +448,8 @@
 
                 // --- PROCESS SONGS IN BATCH ---
                 for (const item of batchSongs) {
+                    if (STATE.isStopping) break; // Inner loop stop
+
                     setBtn(`Batch ${batchNum}: Song ${allMetadata.length + 1}/${uniqueSongs.length}...`, true);
 
                     // Title Extraction (Legacy List View)
@@ -743,7 +772,11 @@
                 // --- COOLDOWN ---
                 if (i < totalBatches - 1) {
                     setBtn(`Cooling down...`, true);
-                    await new Promise(r => setTimeout(r, DELAY_BETWEEN_BATCHES));
+                    // Check stop during cooldown
+                    for (let c = 0; c < DELAY_BETWEEN_BATCHES / 100; c++) {
+                        if (STATE.isStopping) break;
+                        await new Promise(r => setTimeout(r, 100));
+                    }
                 }
             }
 
@@ -782,7 +815,7 @@
             <div style="padding: 20px; border-bottom: 1px solid #222; display:flex; justify-content:space-between; align-items:center; background: #111;">
                 <div style="display:flex; flex-direction:column; gap:4px;">
                     <h1 style="margin:0; font-size:16px; font-weight:700;">Producer.ai Toolsuite</h1>
-                    <div style="font-size:11px; color:#aaa; font-weight:600; margin-top:2px;">Release Build v4.1.1</div>
+                    <div style="font-size:11px; color:#aaa; font-weight:600; margin-top:2px;">Release Build v4.1.2</div>
                     <div style="font-size:11px; color:#888; display:flex; align-items:center; gap:6px; margin-top:2px;">
                         <span>💳</span> <span id="sp-credits-text" style="color:#fff; font-family:monospace;">${STATE.credits} CR</span>
                     </div>
@@ -832,8 +865,11 @@
                          <span id="sp-status-text">Processing...</span>
                          <span id="sp-status-count">0/0</span>
                     </div>
-                    <div style="height:4px; background:#222; border-radius:2px; overflow:hidden;">
-                        <div id="sp-progress-fill" style="width:0%; height:100%; background:#fff; transition:width 0.3s;"></div>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                         <div style="flex:1; height:4px; background:#222; border-radius:2px; overflow:hidden;">
+                             <div id="sp-progress-fill" style="width:0%; height:100%; background:#fff; transition:width 0.3s;"></div>
+                         </div>
+                         <button id="sp-stop-btn" style="background:#cc0000; color:#fff; border:none; border-radius:4px; padding:2px 6px; font-size:9px; font-weight:700; cursor:pointer;" title="Stop Operation">STOP</button>
                     </div>
                 </div>
                 <div id="sp-footer-idle" style="text-align:center;">Ready</div>
@@ -843,6 +879,14 @@
         document.body.appendChild(sidebar);
 
         sidebar.querySelector('#sp-close-btn').onclick = closeSidebar;
+        sidebar.querySelector('#sp-stop-btn').onclick = () => {
+            if (confirm("Stop current operation?")) {
+                STATE.isStopping = true;
+                const status = document.getElementById('sp-status-text');
+                if (status) status.innerText = "Stopping...";
+            }
+        };
+
         sidebar.querySelectorAll('.sp-tab-btn').forEach(btn => {
             btn.onclick = () => {
                 sidebar.querySelectorAll('.sp-tab-btn').forEach(b => {
@@ -997,7 +1041,7 @@
             { id: 'session', label: `Full Session (${visibleSongs})`, valid: isSession, suffix: '(Session Page Only)' },
             { id: 'playlist', label: `Full Playlist (${visibleSongs})`, valid: isPlaylist, suffix: '(Playlist Page Only)' },
             { id: 'song', label: `Current Song`, valid: STATE.pageType === 'song', suffix: '(Song Page Only)' },
-            { id: 'all', label: `All Visible Songs (${visibleSongs})`, valid: isLibrary, suffix: '(My Songs Page Only)' },
+            { id: 'all', label: `All Visible Songs (${visibleSongs})`, valid: isLibrary || STATE.pageType === 'profile', suffix: '(My Songs / Profile Only)' },
             { id: 'selected', label: `Selected Songs Only (${countSelectedSongs()})`, valid: isLibrary, suffix: '(My Songs Page Only)' }
         ];
 
@@ -1147,6 +1191,13 @@
         const delivery = document.getElementById('sp-dl-delivery')?.value || 'zip';
 
         setBtn("Scanning...", true);
+        STATE.isStopping = false; // Reset
+
+        // Show Status Bar
+        const statusBar = document.getElementById('sp-status-bar');
+        const idleFooter = document.getElementById('sp-footer-idle');
+        if (statusBar) statusBar.style.display = 'block';
+        if (idleFooter) idleFooter.style.display = 'none';
 
         try {
             let songs = [];
@@ -1225,6 +1276,10 @@
             let success = 0;
 
             for (const item of songs) {
+                if (STATE.isStopping) {
+                    setBtn("Stopped", false);
+                    break;
+                }
                 processed++;
                 setBtn(`Downloading ${processed}/${songs.length}...`, true);
 
@@ -1331,6 +1386,11 @@
             alert("Download Error: " + err.message);
         } finally {
             setBtn("EXPORT AUDIO", false);
+            // Hide Status Bar
+            const statusBar = document.getElementById('sp-status-bar');
+            const idleFooter = document.getElementById('sp-footer-idle');
+            if (statusBar) statusBar.style.display = 'none';
+            if (idleFooter) idleFooter.style.display = 'block';
         }
     }
 
@@ -1346,6 +1406,7 @@
         const btn = document.getElementById('sp-run-export');
         const setBtn = (text, disabled) => { if (btn) { btn.innerText = text; btn.disabled = disabled; } };
 
+        STATE.isStopping = false; // Reset stop flag
         setBtn("Initializing...", true);
 
         try {
@@ -1527,7 +1588,15 @@
                         }
 
                         const songUrl = `https://www.producer.ai/song/${item.uuid}`;
-                        const resp = await fetch(songUrl, { headers: { 'Authorization': `Bearer ${token}` } });
+
+                        let resp = null;
+                        try {
+                            resp = await fetchWithRetry(songUrl, { headers: { 'Authorization': `Bearer ${token}` } }, 1);
+                        } catch (err) {
+                            console.warn(`Failed to fetch metadata for ${item.uuid}`, err);
+                            // Continue with empty metadata rather than crashing
+                        }
+
                         let lyrics = "";
                         let sound = "";
                         let model = "unknown";
@@ -1535,7 +1604,7 @@
                         let neg_prompt = "";
                         let coverUrl = "";
 
-                        if (resp.ok) {
+                        if (resp && resp.ok) {
                             const htmlText = await resp.text();
                             const parser = new DOMParser();
                             const doc = parser.parseFromString(htmlText, 'text/html');
@@ -1918,11 +1987,17 @@
             const t = h1.innerText.trim();
             if (t !== "Song" && t !== "Producerai Toolsuite") {
                 // Avoid "Create" or generic H1s
-                if (!["Create", "Home", "Library"].includes(t)) {
+                if (!["Create", "Home", "Library", "Discover", "Feed"].includes(t)) {
                     // console.log("Found H1 Title:", t);
                     return t;
                 }
             }
+        }
+
+        // 4. Profile Page Fallback (URL Slug)
+        if (STATE.pageType === 'profile') {
+            const parts = window.location.pathname.split('/').filter(p => p);
+            if (parts.length === 1) return parts[0];
         }
 
         // 4. Hydration Fallback (most robust for Songs)
@@ -1994,8 +2069,16 @@
             // title = "Song"; // DELETED to allow extraction
         } else if (path.includes('/playlist/')) {
             STATE.pageType = 'playlist';
+        } else if (path.includes('/playlist/')) {
+            STATE.pageType = 'playlist';
         } else {
-            STATE.pageType = 'other';
+            // Heuristic for profile page: /username (and not restricted paths)
+            const parts = path.split('/').filter(p => p);
+            if (parts.length === 1 && !['settings', 'create', 'search', 'feed', 'library', 'login', 'signup'].includes(parts[0])) {
+                STATE.pageType = 'profile';
+            } else {
+                STATE.pageType = 'other';
+            }
         }
 
         if (title === "Untitled") {
@@ -2003,8 +2086,15 @@
         }
 
         if (title.startsWith("Producer.ai") || title === "Toolsuite") {
-            const prefix = STATE.pageType === 'playlist' ? 'Playlist_' : 'Session_';
-            title = prefix + new Date().getTime().toString().slice(-6);
+            if (STATE.pageType === 'profile') {
+                // Profile: Use username from URL if title is generic
+                const parts = window.location.pathname.split('/').filter(p => p);
+                if (parts.length === 1) title = parts[0];
+                else title = "Profile_" + new Date().getTime().toString().slice(-6);
+            } else {
+                const prefix = STATE.pageType === 'playlist' ? 'Playlist_' : 'Session_';
+                title = prefix + new Date().getTime().toString().slice(-6);
+            }
         }
 
         STATE.pageTitle = title.replace(/[\/\\:*?"<>|]/g, '_');

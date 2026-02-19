@@ -1,5 +1,12 @@
 # Release Notes
 
+## [v4.1.2] - 2026-02-19
+
+### Changed
+- **Profile Page Support:** Added "All Visible" download option for User Profile pages (e.g. `/username`).
+- **Rebranding:** Removed "(Clean)" from extension name in manifest.
+- **Version Bump:** Updated to v4.1.2.
+
 ## [v4.1.1] - 2026-02-18
 
 ### Changed

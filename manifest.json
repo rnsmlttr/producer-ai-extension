@@ -1,7 +1,8 @@
 {
     "manifest_version": 3,
-    "name": "Producer.ai Download Suite (Clean)",
-    "version": "4.1.1",
+    "name": "Producer.ai Download Suite",
+    "version": "4.1.2",
+    "author": "rnsmlttr",
     "description": "Complete downloading toolkit.",
     "permissions": [
         "activeTab",
