@@ -395,27 +395,4 @@ async function fetchWithAuth(url, token) {
     return blob;
 }
 
-// --- status listener ---
-chrome.downloads.onChanged.addListener((delta) => {
-    chrome.tabs.query({}, (tabs) => {
-        for (const t of tabs) {
-            // report completion
-            if (delta.state && delta.state.current === 'complete') {
-                chrome.tabs.sendMessage(t.id, {
-                    type: "DOWNLOAD_COMPLETE",
-                    downloadId: delta.id
-                });
-            }
-
-            // report errors/interruptions
-            if (delta.error) {
-                console.error("Download Interrupted:", delta.error.current);
-                chrome.tabs.sendMessage(t.id, {
-                    type: "DOWNLOAD_ERROR",
-                    downloadId: delta.id,
-                    error: delta.error.current
-                });
-            }
-        }
-    });
-});
+// --- status listener removed to prevent "Receiving end does not exist" errors ---

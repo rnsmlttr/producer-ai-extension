@@ -1,6 +1,6 @@
 # Producer.ai Toolsuite
 
-**Release Build v4.1.0**
+**Release Build v4.1.1**
 
 The **Producer.ai Toolsuite** is a powerful browser extension that transforms your workflow on Producer.ai. It provides a comprehensive set of tools for downloading audio, exporting metadata, and archiving entire sessions.
 

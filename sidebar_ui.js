@@ -47,7 +47,6 @@
 
         const type = resp.headers.get('content-type');
         if (type && type.includes('application/json')) {
-            // User reported downloading JSON files instead of WAVs. 
             // This handles the signed-URL redirect pattern.
             const data = await resp.json();
             if (data.url) {
@@ -232,15 +231,23 @@
         document.getElementById('sp-conf-close').onclick = () => modal.remove();
     }
 
-    async function handleMasterExport(e) {
+    async function handleMasterExport(e, format = 'wav') {
         if (e) e.preventDefault();
 
         // Ensure JSZip
         if (typeof JSZip === 'undefined') { alert("JSZip not loaded. Reload page."); return; }
 
-        const btn = document.getElementById('sp-run-master-export');
-        // console.log("handleMasterExport V4.1 STARTED");
-        const setBtn = (txt, dis) => { if (btn) { btn.innerText = txt; btn.disabled = dis; } };
+        const btnWav = document.getElementById('sp-run-master-wav');
+        const btnMp3 = document.getElementById('sp-run-master-mp3');
+
+        // Helper to update UI
+        const setBtn = (txt, dis) => {
+            if (format === 'wav' && btnWav) btnWav.innerText = txt;
+            if (format === 'mp3' && btnMp3) btnMp3.innerText = txt;
+
+            if (btnWav) btnWav.disabled = dis;
+            if (btnMp3) btnMp3.disabled = dis;
+        };
 
         setBtn("Initializing V4.0...", true); // VISIBLE VERSION MARKER
 
@@ -611,18 +618,25 @@
                     // --- DOWNLOAD AUDIO ---
                     // --- DOWNLOAD AUDIO ---
                     try {
-                        // Priority: WAV -> MP3
-                        try {
-                            const blob = await fetchAudioBlob(item.uuid, 'wav', token);
-                            audioFolder.file(`${safeName}.wav`, blob);
+                        if (format === 'mp3') {
+                            // MP3 Only
+                            const blob = await fetchAudioBlob(item.uuid, 'mp3', token);
+                            audioFolder.file(`${safeName}.mp3`, blob);
                             stats.success++;
-                        } catch (e) {
-                            // Fallback MP3
+                        } else {
+                            // WAV (Default) -> Fallback to MP3
                             try {
-                                const blob = await fetchAudioBlob(item.uuid, 'mp3', token);
-                                audioFolder.file(`${safeName}.mp3`, blob);
+                                const blob = await fetchAudioBlob(item.uuid, 'wav', token);
+                                audioFolder.file(`${safeName}.wav`, blob);
                                 stats.success++;
-                            } catch (e2) { stats.failed++; }
+                            } catch (e) {
+                                // Fallback MP3
+                                try {
+                                    const blob = await fetchAudioBlob(item.uuid, 'mp3', token);
+                                    audioFolder.file(`${safeName}.mp3`, blob);
+                                    stats.success++;
+                                } catch (e2) { stats.failed++; }
+                            }
                         }
                     } catch (e) { stats.failed++; }
 
@@ -738,7 +752,8 @@
         } catch (err) {
             alert("Master Export Failed: " + err.message);
         } finally {
-            setBtn("★ FULL EXPORT PACKAGE", false);
+            if (btnWav) { btnWav.innerText = "WAV"; btnWav.disabled = false; }
+            if (btnMp3) { btnMp3.innerText = "MP3"; btnMp3.disabled = false; }
         }
     }
 
@@ -767,7 +782,7 @@
             <div style="padding: 20px; border-bottom: 1px solid #222; display:flex; justify-content:space-between; align-items:center; background: #111;">
                 <div style="display:flex; flex-direction:column; gap:4px;">
                     <h1 style="margin:0; font-size:16px; font-weight:700;">Producer.ai Toolsuite</h1>
-                    <div style="font-size:11px; color:#aaa; font-weight:600; margin-top:2px;">Release Build v4.1.0</div>
+                    <div style="font-size:11px; color:#aaa; font-weight:600; margin-top:2px;">Release Build v4.1.1</div>
                     <div style="font-size:11px; color:#888; display:flex; align-items:center; gap:6px; margin-top:2px;">
                         <span>💳</span> <span id="sp-credits-text" style="color:#fff; font-family:monospace;">${STATE.credits} CR</span>
                     </div>
@@ -776,21 +791,36 @@
             </div>
 
             <div style="padding: 12px; border-bottom: 1px solid #333; background: #151515;">
-                <button id="sp-run-master-export" style="
-                    width:100%; padding:14px; background: linear-gradient(135deg, #FFD700 0%, #FFA500 100%); 
-                    color:#1a1a1a; font-weight:900; border:none; border-radius:4px; cursor:pointer; 
-                    box-shadow: 0 4px 15px rgba(255, 215, 0, 0.3); font-size:13px; letter-spacing:0.5px;
-                    display:flex; align-items:center; justify-content:center; gap:8px;
-                    text-transform: uppercase;
+                <div style="
+                    background: linear-gradient(135deg, #FFD700 0%, #FFA500 100%); 
+                    color:#1a1a1a; font-weight:900; border-radius:4px 4px 0 0; 
+                    padding:8px; text-align:center; font-size:12px; letter-spacing:0.5px;
+                    text-transform: uppercase; box-shadow: 0 4px 15px rgba(255, 215, 0, 0.2);
                 ">
-                    <span>★ FULL EXPORT PACKAGE</span>
-                </button>
-                <div style="text-align:center; font-size:10px; color:#bbb; margin-top:6px; font-weight:600; letter-spacing:0.5px;">WAVs • Metadata • Lyrics • Chat Logs</div>
+                    ★ FULL EXPORT PACKAGE
+                </div>
+                <div style="display:flex; gap:1px;">
+                    <button id="sp-run-master-wav" style="
+                        flex:1; padding:12px; background: #222; color:#fff; font-weight:700; 
+                        border:none; border-radius:0 0 0 4px; cursor:pointer; font-size:11px;
+                        transition: background 0.2s; border-right:1px solid #333;
+                    " onmouseover="this.style.background='#333'" onmouseout="this.style.background='#222'">
+                        WAV
+                    </button>
+                    <button id="sp-run-master-mp3" style="
+                        flex:1; padding:12px; background: #222; color:#fff; font-weight:700; 
+                        border:none; border-radius:0 0 4px 0; cursor:pointer; font-size:11px;
+                        transition: background 0.2s; 
+                    " onmouseover="this.style.background='#333'" onmouseout="this.style.background='#222'">
+                        MP3
+                    </button>
+                </div>
+                <div style="text-align:center; font-size:10px; color:#bbb; margin-top:8px; font-weight:600; letter-spacing:0.5px;">Audio • Metadata • Lyrics • Chat Logs</div>
             </div>
 
             <div style="display:flex; border-bottom: 1px solid #222; background: #0d0d0d;">
-                <button class="sp-tab-btn active" data-tab="download" style="flex:1; padding:12px; background:transparent; border:none; color:#fff; border-bottom:2px solid #fff; cursor:pointer; font-weight:600; text-transform:uppercase; font-size:12px;">AUDIO</button>
-                <button class="sp-tab-btn" data-tab="export" style="flex:1; padding:12px; background:transparent; border:none; color:#666; border-bottom:2px solid transparent; cursor:pointer; font-weight:600; text-transform:uppercase; font-size:12px;">METADATA</button>
+                <button class="sp-tab-btn active" data-tab="download" style="flex:1; padding:12px; background:transparent; border:none; color:#fff; border-bottom:2px solid #fff; cursor:pointer; font-weight:600; text-transform:uppercase; font-size:12px;">Download (Audio Only)</button>
+                <button class="sp-tab-btn" data-tab="export" style="flex:1; padding:12px; background:transparent; border:none; color:#666; border-bottom:2px solid transparent; cursor:pointer; font-weight:600; text-transform:uppercase; font-size:12px;">Download (Metadata Only)</button>
             </div>
 
             <div id="sp-tab-content-download" class="sp-tab-content" style="flex:1; overflow-y:auto; padding:20px;"></div>
@@ -834,7 +864,8 @@
         sidebar.addEventListener('click', (e) => {
             if (e.target) {
                 if (e.target.id === 'sp-run-export') handleExport(e);
-                if (e.target.id === 'sp-run-master-export' || e.target.parentElement?.id === 'sp-run-master-export') handleMasterExport(e);
+                if (e.target.id === 'sp-run-master-wav' || e.target.parentElement?.id === 'sp-run-master-wav') handleMasterExport(e, 'wav');
+                if (e.target.id === 'sp-run-master-mp3' || e.target.parentElement?.id === 'sp-run-master-mp3') handleMasterExport(e, 'mp3');
                 if (e.target.id === 'sp-edit-title-btn') updateTitleManually();
             }
         });

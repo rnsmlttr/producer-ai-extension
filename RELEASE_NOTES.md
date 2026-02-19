@@ -1,16 +1,27 @@
-# Release Notes v4.1.0
+# Release Notes
 
-## 🌟 New Features
-- **Smart Folder Organization**: The "Smart (Auto-Name)" option now correctly names the exported Zip file and its internal folder using only the **Clean Session Title** (e.g., `My Session.zip`). Timestamps are removed for cleaner organization.
-- **Audio Export Folder Support**:
-  - Unlocked the ability for "Individual Files" to be saved directly into a named folder (e.g., `Downloads/My Session/Song.wav`) instead of cluttering the root Downloads folder.
-  - This utilizes the extension's background script to manage downloads securely.
+## [v4.1.1] - 2026-02-18
 
-## 🛠 Improvements & Fixes
-- **Filename Sanitization**: Relaxed the file naming rules to allow special characters like `#`, `—`, `(`, `)` which are common in song titles, while still blocking illegal system characters (`/`, `:`, `?`, etc.).
-- **UI Responsiveness**: Fixed an issue where the "Focus Mode" dropdown would show stale options (like "Full Playlist") when ensuring navigating between different page types (e.g., Playlist -> Song).
-- **Code Cleanup**: Removed internal debug logging for a cleaner production build.
+### Changed
+- **UI Update:** "Full Export Package" button replaced with a header and two distinct valid buttons: **WAV** and **MP3**.
+- **UI Update:** "AUDIO" tab renamed to "Download (Audio Only)".
+- **UI Update:** "METADATA" tab renamed to "Download (Metadata Only)".
+- **Refinement:** Simplifed button labels ("WAV (Source)" -> "WAV", etc).
+- **Maintenance:** Internal code scrubbing and comment cleanup.
+- **Fix:** Ensured consistent URL format (`https://www.producer.ai/song/[uuid]`) for metadata exports.
 
-## 📦 Installation
-1. Download the source code.
-2. Load unpacked in `chrome://extensions`.
+## [v4.1.0] - 2026-02-18
+
+### Added
+- **Smart Folder Export:** "Smart (Auto-Name)" option in Organization dropdown. Uses clean session title as folder name.
+- **Dual Format Export:** Prepared logic for WAV/MP3 split (UI implemented in v4.1.1).
+- **Relaxed Sanitization:** Filenames now support special characters (`#`, `—`, etc) while still filtered for OS safety.
+- **Individual File Folders:** "Individual Files" download option now saves files into a named folder in Downloads (e.g. `Downloads/SessionName/Song.wav`).
+- **Sidebar Version Display:** Added "Release Build v4.1.0" to sidebar header.
+
+### Fixed
+- **Dropdown Stale State:** Fixed issue where dropdown options (Full Session vs Full Playlist) would not update when navigating between pages.
+- **MHTML Export:** Fixed `URL.createObjectURL` error and "Tabs cannot be edited" error.
+
+## [v4.0.0] - 2026-02-17
+- Major release with sidebar UI, metadata scraping, and batch downloading.
